@@ -3,11 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="description" content="Mapa de Frota — visualizador unificado de aplicação agrícola. Suporta ISO-XML (TASKDATA) e Topcon C3000. Processamento 100% no navegador.">
-<meta name="theme-color" content="#215c33">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="mobile-web-app-capable" content="yes">
 <title>Mapa de Frota · ISO-XML + C3000</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -19,7 +14,7 @@
   --vermelho:#b3402e; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{height:100%}
+html,body{height}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   background:var(--papel);color:var(--tinta);display:flex;flex-direction:column;overflow:hidden}
 header{background:var(--verde-esc);color:#fff;padding:10px 14px;flex-shrink:0;
@@ -82,7 +77,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 <body>
 <header>
   <h1>Mapa de Frota — aplicação unificada</h1>
-  <p>ISO-XML (TASKDATA) + Topcon C3000 · frota = nome do zip · processamento 100% no navegador</p>
+  <p>ISO-XML (TASKDATA) + Topcon C3000 · frota = nome do zip</p>
 </header>
 
 <div id="abas">
@@ -104,7 +99,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
     <div class="cartao" id="cartao-unids" style="display:none">
       <h2>Frotas e unidades carregadas</h2>
       <div style="overflow-x:auto"><table id="tab-unids">
-        <thead><tr><th>Frota</th><th>Unidade</th><th>Fonte</th><th class="num">Registros</th><th>Início</th><th>Fim</th></tr></thead>
+        <thead><tr><th>Frota</th><th>Unidade</th><th>Fonte</th><th>Fazenda · Talhão</th><th class="num">Registros</th><th>Início</th><th>Fim</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </div>
@@ -149,6 +144,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="topo">Topográfico</option>
       </select>
       <div class="chk"><input type="checkbox" id="chk-inv"><span>Inverter seções (C3000)</span></div>
+      <div class="chk" id="grupo-talhoes" style="display:none"><input type="checkbox" id="chk-talhoes" checked><span>Contorno dos talhões</span></div>
       <div id="legenda"></div>
     </div>
   </div>
@@ -157,21 +153,22 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
   <div class="tela" id="tela-exportar">
     <div class="cartao">
       <h2>Exportar shapefile de faixa</h2>
-      <label>Formato</label>
-      <select id="exp-fmt">
-        <option value="lote">LOTE — 1 shape por frota (zip único)</option>
-        <option value="junto">Todas as frotas juntas — 1 shape</option>
-        <option value="frota">Uma frota específica</option>
+      <label>Separar arquivos por</label>
+      <select id="exp-sep">
+        <option value="frota">Frota — 1 shape por frota</option>
+        <option value="fazenda">Fazenda — 1 shape por fazenda</option>
+        <option value="talhao">Talhão — 1 shape por talhão</option>
+        <option value="nada">Não separar — tudo num shape só</option>
       </select>
-      <div id="grupo-exp-frota" style="display:none">
-        <label>Frota</label>
-        <select id="exp-frota"></select>
-      </div>
+      <label>Filtrar frota</label>
+      <select id="exp-frota"></select>
+      <label>Filtrar dia</label>
+      <select id="exp-dia"></select>
       <div class="chk"><input type="checkbox" id="exp-agrupa" checked><span>Agrupar segmentos (~2 m) — arquivo menor</span></div>
       <button class="botao" id="btn-exportar">Gerar e compartilhar</button>
       <div id="exp-status" style="font-size:12px;font-family:var(--mono);color:var(--tinta2);margin-top:8px"></div>
       <div style="font-size:11px;color:var(--tinta2);margin-top:10px">
-        Colunas: DATA_HORA · FROTA · UNIDADE · LARG_M · VEL_KMH · ALT_M · TAXA_REAL (L/ha) — WGS84
+        Colunas: DATA_HORA · FROTA · UNIDADE · FAZENDA · TALHAO · TAREFA · LARG_M · VEL_KMH · ALT_M · TAXA_REAL (L/ha) — WGS84
       </div>
     </div>
   </div>
@@ -189,7 +186,8 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
          head:F32|null (C3000), mask:Int32Array|null, ini|null }
 ===================================================================== */
 const UNIDADES = [];
-let mapa=null, camada=null;
+const TALHOES = [];
+let mapa=null, camada=null, camadaTalhoes=null;
 const TODAS='*';
 
 /* ================= Entrada ================= */
@@ -223,7 +221,7 @@ async function tratar(lista){
   }
 }
 async function carregarZip(zip, frota, st){
-  const xmls={}, bins={}, csvs={}, inis={};
+  const xmls={}, bins={}, csvs={}, inis={}, xmlCadastro=[];
   function idJob(caminho, prefixo){
     const partes = caminho.split('/');
     if(partes.length>=2){
@@ -238,8 +236,12 @@ async function carregarZip(zip, frota, st){
     const base = caminho.split('/').pop();
     if(base.startsWith('._')) continue;
     const cima = base.toUpperCase();
+    const ehTaskdataDir = !caminho.toUpperCase().includes('REPORTS');
     if(cima.startsWith('TLG') && cima.endsWith('.XML')) xmls[cima] = await z.async('string');
     else if(cima.startsWith('TLG') && cima.endsWith('.BIN')) bins[cima] = await z.async('arraybuffer');
+    else if(cima.endsWith('.XML') && ehTaskdataDir &&
+      (cima.startsWith('TSK')||cima.startsWith('PFD')||cima.startsWith('FRM')||cima.startsWith('CTR')))
+      xmlCadastro.push(await z.async('string'));
     else if(cima.endsWith('_PPD_FULLDATA.CSV')){
       const id = idJob(caminho, base.replace(/_PPD_FullData\.csv$/i,''));
       (csvs[id] = csvs[id]||[]).push(await z.async('string'));
@@ -249,8 +251,9 @@ async function carregarZip(zip, frota, st){
       inis[id] = await z.async('string');
     }
   }
-  // ISO-XML
+  const cad = parseCadastro(xmlCadastro);
   const nomesTLG = Object.keys(xmls).sort();
+  const pfdsUsados = new Set();
   for(const nomeX of nomesTLG){
     const base = nomeX.replace('.XML','');
     const bin = bins[base+'.BIN'];
@@ -258,16 +261,66 @@ async function carregarZip(zip, frota, st){
     st.textContent = frota+' · decodificando '+base+'…';
     await new Promise(r=>setTimeout(r,10));
     const u = normalizarISO(xmls[nomeX], bin, frota, base);
-    if(u) UNIDADES.push(u);
+    if(u){
+      const info = cad.porTLG[base] || {};
+      u.tarefa = info.tarefa||''; u.talhao = info.talhao||'';
+      u.fazenda = info.fazenda||''; u.cliente = info.cliente||'';
+      if(info.pfd) pfdsUsados.add(info.pfd);
+      UNIDADES.push(u);
+    }
     bins[base+'.BIN'] = null;
   }
-  // C3000
+  for(const pid of pfdsUsados){
+    const p = cad.pfdM[pid];
+    if(p && p.aneis.length){
+      const fz = p.fazNome||'';
+      TALHOES.push({frota, nome:p.nome, fazenda:fz, aneis:p.aneis});
+    }
+  }
   for(const id in csvs){
     st.textContent = frota+' · job '+id+'…';
     await new Promise(r=>setTimeout(r,10));
     const u = normalizarC3000(csvs[id], inis[id]||'', frota, id);
-    if(u) UNIDADES.push(u);
+    if(u){ u.tarefa=''; u.talhao=''; u.fazenda=''; u.cliente=''; UNIDADES.push(u); }
   }
+}
+function parseCadastro(textos){
+  const parser = new DOMParser();
+  const ctr={}, frmM={}, pfdM={}, porTLG={};
+  for(const txt of textos){
+    const doc = parser.parseFromString(txt,'text/xml');
+    doc.querySelectorAll('CTR').forEach(e=>ctr[e.getAttribute('A')]=e.getAttribute('B')||'');
+    doc.querySelectorAll('FRM').forEach(e=>frmM[e.getAttribute('A')]={nome:e.getAttribute('B')||'', ctr:e.getAttribute('I')||''});
+    doc.querySelectorAll('PFD').forEach(e=>{
+      const aneis=[];
+      e.querySelectorAll('PLN LSG').forEach(l=>{
+        const anel=[];
+        l.querySelectorAll('PNT').forEach(p=>{
+          const la=parseFloat(p.getAttribute('C')), lo=parseFloat(p.getAttribute('D'));
+          if(isFinite(la)&&isFinite(lo)) anel.push([la,lo]);
+        });
+        if(anel.length>=3) aneis.push(anel);
+      });
+      pfdM[e.getAttribute('A')]={nome:e.getAttribute('C')||'', frm:e.getAttribute('F')||'', aneis};
+    });
+  }
+  for(const id in pfdM) pfdM[id].fazNome = (frmM[pfdM[id].frm]||{}).nome||'';
+  for(const txt of textos){
+    const doc = parser.parseFromString(txt,'text/xml');
+    doc.querySelectorAll('TSK').forEach(t=>{
+      const p = pfdM[t.getAttribute('E')]||{};
+      const fz = frmM[p.frm]||{};
+      const info = {
+        tarefa:t.getAttribute('B')||'', talhao:p.nome||'',
+        fazenda:fz.nome||'', cliente:ctr[fz.ctr]||'', pfd:t.getAttribute('E')||''
+      };
+      t.querySelectorAll('TLG').forEach(g=>{
+        const nm = (g.getAttribute('A')||'').toUpperCase();
+        if(nm) porTLG[nm] = info;
+      });
+    });
+  }
+  return {porTLG, pfdM};
 }
 
 /* ================= Fonte ISO-XML ================= */
@@ -276,7 +329,6 @@ function normalizarISO(xmlTxt, buf, frota, nome){
   const doc = new DOMParser().parseFromString(xmlTxt, 'text/xml');
   const tim = doc.querySelector('TIM');
   if(!tim) return null;
-  // layout
   const L = {timA: tim.getAttribute('A')==='', ptn:[], dlvs:[]};
   const ptn = tim.querySelector('PTN');
   const camposP = [['A','i4'],['B','i4'],['C','i4'],['D','u1'],['E','u2'],['F','u2'],['G','u1'],['H','u4'],['I','u2']];
@@ -285,7 +337,6 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     if(v!==null && v==='') L.ptn.push([attr,tipo]);
   }
   tim.querySelectorAll('DLV').forEach(d=>L.dlvs.push({ddi:d.getAttribute('A').toUpperCase(), det:d.getAttribute('C')}));
-  // parse binário colunar (2 passadas)
   const dv = new DataView(buf);
   const fim = buf.byteLength;
   const fixo = (L.timA?6:0) + L.ptn.reduce((s,c)=>s+TAM[c[1]],0);
@@ -316,7 +367,6 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     for(let k=0;k<nd;k++){ dlvIdx[p]=dv.getUint8(o); dlvVal[p]=dv.getInt32(o+1,true); o+=5; p++; }
   }
   dlvPtr[n]=p;
-  // melhores índices por DDI (o que mais varia)
   function melhorDDI(ddiNum){
     const cand=[];
     L.dlvs.forEach((d,i)=>{ if(parseInt(d.ddi,16)===ddiNum) cand.push(i); });
@@ -345,7 +395,6 @@ function normalizarISO(xmlTxt, buf, frota, nome){
   const cLarg = colFF(melhorDDI(0x0043));
   const cWS = colFF(melhorDDI(0x008D));
   const cTaxa = colFF(melhorDDI(0x0002));
-  // colunas normalizadas
   const larg=new Float32Array(n), taxa=new Float32Array(n).fill(NaN);
   const vel=new Float32Array(n).fill(NaN), alt=new Float32Array(n).fill(NaN);
   const tempo=new Float64Array(n);
@@ -358,7 +407,6 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     larg[i]=lg;
     if(cTaxa && !isNaN(cTaxa[i])) taxa[i]=cTaxa[i]*1e-4;
     if(temAlt) alt[i]=altMM[i]/1000;
-    // velocidade GPS: janela de ~1 s
     while(j<i && tempo[i]-tempo[j] > 1200) j++;
     const dt = (tempo[i]-tempo[j])/1000;
     if(dt>0.3 && !(lat[i]===0&&lon[i]===0) && !(lat[j]===0&&lon[j]===0)){
@@ -399,11 +447,10 @@ function parseINI(txt){
 }
 function normalizarC3000(listaCsv, iniTxt, frota, nome){
   const ini = parseINI(iniTxt);
-  // parse de todos os CSVs da OS
   const brutos = [];
   for(const txt of listaCsv){
     const linhas = txt.split(/\r?\n/);
-    const cab = linhas[0].split(',').map(s=>s.trim()).filter(s=>s);
+    const cab = líneas[0].split(',').map(s=>s.trim()).filter(s=>s);
     const ic = {}; cab.forEach((c,i)=>ic[c]=i);
     const col = (...ns)=>{ for(const nn of ns) if(nn in ic) return ic[nn]; return -1; };
     const iData=col('Date'), iHora=col('Time');
@@ -442,7 +489,6 @@ function normalizarC3000(listaCsv, iniTxt, frota, nome){
   const head=new Float32Array(n);
   const mask=new Int32Array(n);
   const dtStr=new Array(n);
-  // largura efetiva por mask (cache)
   const cacheLarg = new Map();
   function largDe(mk){
     if(cacheLarg.has(mk)) return cacheLarg.get(mk);
@@ -485,7 +531,6 @@ function trechosMask(mk, ini, inv){
   }
   return out;
 }
-/* cadeias de amostras agregadas p/ uma unidade */
 function construirCadeias(u, corArr, passoM, inv){
   const cadeias=[]; let atual=null, prev=null, areaM2=0, proj=null;
   function fechar(){ if(atual && atual.length>=2) cadeias.push(atual); atual=null; prev=null; }
@@ -508,7 +553,6 @@ function construirCadeias(u, corArr, passoM, inv){
     if(!atual) atual=[];
     if(prev && atual.length){
       if(u.mask && mk!==prev.mk){
-        // mask mudou: fecha e recomeça com ponte
         const ponte = {...prev, mk, larg:lg};
         areaM2 += Math.hypot(x-ponte.x,y-ponte.y)*(lg+prev.larg)/2;
         fechar();
@@ -543,8 +587,10 @@ function montarTabelas(){
   const tb = document.querySelector('#tab-unids tbody');
   tb.innerHTML='';
   for(const u of UNIDADES){
+    const fzTal = (u.fazenda||u.talhao) ? (u.fazenda+(u.talhao?' · '+u.talhao:'')) : '—';
     tb.innerHTML += '<tr><td><span class="tag frota">'+u.frota+'</span></td>'+
       '<td><span class="tag">'+u.nome+'</span></td><td>'+u.fonte+'</td>'+
+      '<td style="font-family:inherit">'+fzTal+'</td>'+
       '<td class="num">'+u.n.toLocaleString('pt-BR')+'</td>'+
       '<td>'+u.dataHora(0)+'</td><td>'+u.dataHora(u.n-1)+'</td></tr>';
   }
@@ -556,7 +602,17 @@ function montarSeletores(){
   const ops = ['<option value="'+TODAS+'">Todas as frotas ('+fs.length+')</option>']
     .concat(fs.map(f=>'<option value="'+f+'">Frota '+f+'</option>'));
   document.getElementById('sel-frota').innerHTML = ops.join('');
-  document.getElementById('exp-frota').innerHTML = fs.map(f=>'<option value="'+f+'">Frota '+f+'</option>').join('');
+  document.getElementById('exp-frota').innerHTML = ops.join('');
+  const dias = new Set();
+  for(const u of UNIDADES){
+    dias.add(u.dataHora(0).substring(0,10));
+    dias.add(u.dataHora(u.n-1).substring(0,10));
+    for(let i=0;i<u.n;i+=500) dias.add(u.dataHora(i).substring(0,10));
+  }
+  const lista = [...dias].filter(d=>d.length===10).sort();
+  document.getElementById('exp-dia').innerHTML =
+    '<option value="'+TODAS+'">Todos os dias</option>'+
+    lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
 }
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
@@ -621,16 +677,33 @@ function percentis(vals){
 }
 const ROTULO_COR = {taxa:'Taxa real (L/ha)', vel:'Velocidade (km/h)', alt:'Elevação (m)'};
 
+function desenharTalhoes(){
+  if(camadaTalhoes){ mapa.removeLayer(camadaTalhoes); camadaTalhoes=null; }
+  if(!document.getElementById('chk-talhoes').checked) return;
+  const f = document.getElementById('sel-frota').value;
+  const lista = TALHOES.filter(t=> f===TODAS || t.frota===f);
+  if(!lista.length) return;
+  const pols = [];
+  for(const t of lista){
+    for(const anel of t.aneis){
+      const pg = L.polygon(anel,{fill:false,color:'#ffd21f',weight:2,dashArray:'6 4'});
+      pg.bindTooltip((t.fazenda?t.fazenda+' · ':'')+'Talhão '+t.nome,{sticky:true});
+      pols.push(pg);
+    }
+  }
+  camadaTalhoes = L.layerGroup(pols).addTo(mapa);
+}
 function desenharMapa(){
   garantirMapa();
   const leg = document.getElementById('legenda');
   if(camada){ mapa.removeLayer(camada); camada=null; }
   const unids = unidadesVisiveis();
+  document.getElementById('grupo-talhoes').style.display = TALHOES.length?'flex':'none';
+  desenharTalhoes();
   if(!unids.length){ leg.innerHTML=''; return; }
   const corSel = document.getElementById('sel-cor').value;
   const inv = document.getElementById('chk-inv').checked;
   const metrica = (corSel!=='frota' && corSel!=='-') ? corSel : null;
-  // escala global entre todas as unidades exibidas
   let mn=0, mx=0;
   if(metrica){
     const vals=[];
@@ -666,7 +739,6 @@ function desenharMapa(){
         else if(metrica && mx>mn) cor = corGradiente((bucket(cadeia[ini].cor)+0.5)/NB);
         const aneis = [];
         if(u.mask && u.ini && u.ini.secoes.length){
-          // sub-faixas por seção (heading do implemento)
           const tre = trechosMask(cadeia[ini].mk, u.ini, inv);
           for(const [o1,o2] of tre){
             const anel = [];
@@ -681,7 +753,6 @@ function desenharMapa(){
             aneis.push(anel);
           }
         } else {
-          // faixa centrada (perpendicular ao traçado)
           const sub = cadeia.slice(ini, fim+1);
           const {L:lados, R} = bordas(sub);
           const anel = [];
@@ -702,7 +773,6 @@ function desenharMapa(){
   }
   camada = L.layerGroup(pols).addTo(mapa);
   if(limites) mapa.fitBounds(limites.pad(0.05));
-  // legenda
   let html = '<b>'+(areaTotal/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b> (com sobreposição) · '+pols.length+' trechos';
   if(corSel==='frota'){
     html = frotas().filter(f=>areaFrota[f]).map(f=>
@@ -716,22 +786,79 @@ function desenharMapa(){
 function abrirPopup(e){
   const u = e.target._u, i = e.target._idx;
   const fx = (v,d,suf)=> isNaN(v)?'—':v.toFixed(d)+suf;
+  let extra = '';
+  if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+(u.fazenda||'—')+' · '+(u.talhao||'—')+'</b></td></tr>';
+  if(u.tarefa) extra += '<tr><td>Tarefa</td><td class="num">'+u.tarefa+'</td></tr>';
   const html = '<b>Frota '+u.frota+' · '+u.nome+'</b> ('+u.fonte+')<br>'+u.dataHora(i)+'<br>'+
-    u.lat[i].toFixed(7)+', '+u.lon[i].toFixed(7)+'<table>'+
+    u.lat[i].toFixed(7)+', '+u.lon[i].toFixed(7)+'<table>'+extra+
     '<tr><td>Largura aplicada</td><td class="num"><b>'+fx(u.larg[i],2,' m')+'</b></td></tr>'+
     '<tr><td>Taxa real</td><td class="num"><b>'+fx(u.taxa[i],2,' L/ha')+'</b></td></tr>'+
     '<tr><td>Velocidade</td><td class="num">'+fx(u.vel[i],1,' km/h')+'</td></tr>'+
     '<tr><td>Elevação</td><td class="num">'+fx(u.alt[i],1,' m')+'</td></tr>'+
     '</table>';
-  L.popup({maxWidth:260}).setLatLng(e.latlng).setContent(html).openOn(mapa);
+  L.popup({maxWidth:280}).setLatLng(e.latlng).setContent(html).openOn(mapa);
 }
 
 /* ================= Exportação ================= */
 document.getElementById('btn-exportar').addEventListener('click', exportar);
-document.getElementById('exp-fmt').addEventListener('change', ()=>{
-  document.getElementById('grupo-exp-frota').style.display =
-    document.getElementById('exp-fmt').value==='frota' ? 'block':'none';
-});
+function nomeSeguro(s){
+  return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^A-Za-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'').substring(0,40) || 'SEM_NOME';
+}
+async function exportar(){
+  const st = document.getElementById('exp-status');
+  if(!UNIDADES.length){ st.textContent='Carregue os zips primeiro.'; return; }
+  st.textContent='Gerando…';
+  await new Promise(r=>setTimeout(r,30));
+  try{
+    const sep = document.getElementById('exp-sep').value;
+    const fSel = document.getElementById('exp-frota').value;
+    const dSel = document.getElementById('exp-dia').value;
+    const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
+    const inv = document.getElementById('chk-inv').checked;
+    let quads = [];
+    for(const u of UNIDADES){
+      if(fSel!==TODAS && u.frota!==fSel) continue;
+      quads = quads.concat(gerarQuadsUnidade(u, passoM, inv));
+    }
+    if(dSel!==TODAS)
+      quads = quads.filter(q=> q.u.dataHora(q.idx).substring(0,10)===dSel);
+    if(!quads.length) throw new Error('Nenhum polígono no filtro escolhido.');
+    const chave = q => {
+      if(sep==='frota') return 'FROTA_'+q.u.frota;
+      if(sep==='fazenda') return 'FAZ_'+nomeSeguro(q.u.fazenda||'SEM_FAZENDA');
+      if(sep==='talhao') return 'TAL_'+nomeSeguro((q.u.fazenda?q.u.fazenda+'_':'')+(q.u.talhao||'SEM_TALHAO'));
+      return 'FAIXAS';
+    };
+    const grupos = new Map();
+    for(const q of quads){
+      const k = chave(q);
+      if(!grupos.has(k)) grupos.set(k, []);
+      grupos.get(k).push(q);
+    }
+    const sufDia = dSel!==TODAS ? '_'+dSel.replaceAll('-','') : '';
+    const zip = new JSZip();
+    let nOk = 0;
+    for(const [rot, lista] of grupos){
+      st.textContent = rot+'… ('+lista.length.toLocaleString('pt-BR')+' polígonos)';
+      await new Promise(r=>setTimeout(r,10));
+      const s = gerarSHPfaixa(lista);
+      const nomeArq = rot+sufDia;
+      const destino = grupos.size>1 ? zip.folder(nomeArq) : zip;
+      destino.file(nomeArq+'.shp', s.shp); destino.file(nomeArq+'.shx', s.shx);
+      destino.file(nomeArq+'.dbf', s.dbf); destino.file(nomeArq+'.prj', PRJ);
+      nOk++;
+    }
+    const blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
+    const arqNome = (grupos.size>1
+      ? 'FAIXAS_'+nOk+'_'+({frota:'FROTAS',fazenda:'FAZENDAS',talhao:'TALHOES'}[sep]||'GRUPOS')
+      : [...grupos.keys()][0]+sufDia) + '.zip';
+    st.textContent = arqNome+' · '+nOk+' shapefile(s) · '+(blob.size/1024).toFixed(0)+' KB';
+    await entregarArquivo(blob, arqNome);
+  }catch(err){
+    if(err.name!=='AbortError') st.textContent='Erro: '+err.message;
+  }
+}
 function gerarQuadsUnidade(u, passoM, inv){
   const {cadeias, proj} = construirCadeias(u, null, passoM, inv);
   const quads=[];
@@ -782,7 +909,7 @@ function gerarQuadsUnidade(u, passoM, inv){
   return quads;
 }
 function gerarDBF(campos, linhas){
-  const n = linhas.length;
+  const n = líneas.length;
   const larg = campos.reduce((s,c)=>s+c[2],0)+1;
   const cab = 32 + campos.length*32 + 1;
   const buf = new ArrayBuffer(cab + n*larg + 1);
@@ -854,10 +981,12 @@ function gerarSHPfaixa(quads){
     o+=recBytes;
   });
   const campos = [['DATA_HORA','C',23],['FROTA','C',10],['UNIDADE','C',10],
+    ['FAZENDA','C',24],['TALHAO','C',12],['TAREFA','C',32],
     ['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
   const linhas = quads.map(q=>{
     const u=q.u, i=q.idx;
     return [u.dataHora(i), u.frota, u.nome,
+      u.fazenda||'', u.talhao||'', u.tarefa||'',
       q.largM.toFixed(2),
       q.velKmh===null?'':q.velKmh.toFixed(1),
       isNaN(u.alt[i])?'':u.alt[i].toFixed(1),
@@ -877,60 +1006,6 @@ async function entregarArquivo(blob, arqNome){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
 }
-async function exportar(){
-  const fmt = document.getElementById('exp-fmt').value;
-  const st = document.getElementById('exp-status');
-  if(!UNIDADES.length){ st.textContent='Carregue os zips primeiro.'; return; }
-  st.textContent='Gerando…';
-  await new Promise(r=>setTimeout(r,30));
-  try{
-    const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
-    const inv = document.getElementById('chk-inv').checked;
-    function quadsDe(fs){
-      let quads=[];
-      for(const u of UNIDADES){
-        if(fs && u.frota!==fs) continue;
-        quads = quads.concat(gerarQuadsUnidade(u, passoM, inv));
-      }
-      return quads;
-    }
-    let blob, arqNome;
-    if(fmt==='lote'){
-      const zip = new JSZip();
-      let nOk=0;
-      for(const f of frotas()){
-        st.textContent = 'Frota '+f+'…';
-        await new Promise(r=>setTimeout(r,10));
-        const quads = quadsDe(f);
-        if(!quads.length) continue;
-        const s = gerarSHPfaixa(quads);
-        const rot = 'FROTA_'+f;
-        const pasta = zip.folder(rot);
-        pasta.file(rot+'.shp', s.shp); pasta.file(rot+'.shx', s.shx);
-        pasta.file(rot+'.dbf', s.dbf); pasta.file(rot+'.prj', PRJ);
-        nOk++;
-      }
-      if(!nOk) throw new Error('Nenhum polígono gerado.');
-      blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
-      arqNome = 'FAIXAS_'+nOk+'_FROTAS.zip';
-    } else {
-      const fSel = fmt==='frota' ? document.getElementById('exp-frota').value : null;
-      const quads = quadsDe(fSel);
-      if(!quads.length) throw new Error('Nenhum polígono gerado.');
-      const s = gerarSHPfaixa(quads);
-      const rot = fSel ? 'FROTA_'+fSel : 'FROTAS_JUNTAS';
-      const zip = new JSZip();
-      zip.file(rot+'.shp', s.shp); zip.file(rot+'.shx', s.shx);
-      zip.file(rot+'.dbf', s.dbf); zip.file(rot+'.prj', PRJ);
-      blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
-      arqNome = rot+'_shp.zip';
-    }
-    st.textContent = arqNome+' · '+(blob.size/1024).toFixed(0)+' KB';
-    await entregarArquivo(blob, arqNome);
-  }catch(err){
-    if(err.name!=='AbortError') st.textContent='Erro: '+err.message;
-  }
-}
 
 /* ================= Navegação ================= */
 document.querySelectorAll('.aba').forEach(b=>{
@@ -947,6 +1022,7 @@ document.querySelectorAll('.aba').forEach(b=>{
 });
 for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
+document.getElementById('chk-talhoes').addEventListener('change', desenharTalhoes);
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
 document.getElementById('recolher').addEventListener('click', ()=>{
   document.getElementById('painel-mapa').classList.toggle('escondido');
