@@ -14,7 +14,7 @@
   --vermelho:#b3402e; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{height}
+html,body{height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   background:var(--papel);color:var(--tinta);display:flex;flex-direction:column;overflow:hidden}
 header{background:var(--verde-esc);color:#fff;padding:10px 14px;flex-shrink:0;
@@ -32,7 +32,7 @@ main{flex:1;overflow:hidden;position:relative}
 #mapa{width:100%;height:100%}
 .cartao{background:var(--painel);border:1px solid var(--borda);border-radius:10px;padding:14px;margin-bottom:12px}
 .cartao h2{font-size:13px;font-weight:700;color:var(--tinta2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
-#zona-drop{border:2px dashed var(--borda);border-radius:12px;padding:30px 16px;text-align:center;color:var(--tinta2);background:var(--painel)}
+#zona-drop{border:2px dashed var(--borda);border-radius:12px;padding:30px 16px;text-align:center;color:var(--tinta2);background:var(--painel);cursor:pointer}
 #zona-drop.sobre{border-color:var(--verde);background:#eef6ef}
 #zona-drop strong{color:var(--verde);font-size:15px}
 #zona-drop p{font-size:12px;margin-top:6px}
@@ -92,7 +92,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
     <div id="zona-drop">
       <strong>Toque para escolher os .zip das frotas</strong>
       <p>ex.: 1006.zip (C3000) + 1008.zip (TASKDATA ISO-XML) — pode selecionar vários de uma vez</p>
-      <button class="botao" onclick="document.getElementById('arq').click()">Escolher arquivos</button>
+      <button class="botao" id="btn-buscar">Escolher arquivos</button>
       <input type="file" id="arq" multiple accept=".zip,.ZIP">
     </div>
     <div id="status"></div>
@@ -178,26 +178,32 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 'use strict';
 /* =====================================================================
    UNIDADE NORMALIZADA (comum às duas fontes)
-   u = { frota, fonte:'ISO'|'C3000', nome, n,
-         lat:F64, lon:F64, larg:F32(m efetiva; 0 = não aplicando),
-         taxa:F32(L/ha; NaN ausente), vel:F32(km/h; NaN), alt:F32(m; NaN),
-         dataHora(i) -> string,
-         tempo:F64|null (ms p/ detectar gaps; null = sem tempo confiável),
-         head:F32|null (C3000), mask:Int32Array|null, ini|null }
 ===================================================================== */
 const UNIDADES = [];
 const TALHOES = [];
 let mapa=null, camada=null, camadaTalhoes=null;
 const TODAS='*';
 
-/* ================= Entrada ================= */
+/* ================= Entrada e Cliques Corrigidos ================= */
 const inArq = document.getElementById('arq');
 const zona = document.getElementById('zona-drop');
-zona.addEventListener('click', e=>{ if(e.target.tagName!=='BUTTON') inArq.click(); });
-zona.addEventListener('dragover', e=>{e.preventDefault();zona.classList.add('sobre')});
-zona.addEventListener('dragleave', ()=>zona.classList.remove('sobre'));
-zona.addEventListener('drop', e=>{e.preventDefault();zona.classList.remove('sobre');tratar(e.dataTransfer.files)});
-inArq.addEventListener('change', ()=>tratar(inArq.files));
+const btnBuscar = document.getElementById('btn-buscar');
+
+btnBuscar.addEventListener('click', e => {
+  e.stopPropagation();
+  inArq.click();
+});
+
+zona.addEventListener('click', e => {
+  if (e.target.id !== 'arq') {
+    inArq.click();
+  }
+});
+
+zona.addEventListener('dragover', e => { e.preventDefault(); zona.classList.add('sobre'); });
+zona.addEventListener('dragleave', () => zona.classList.remove('sobre'));
+zona.addEventListener('drop', e => { e.preventDefault(); zona.classList.remove('sobre'); tratar(e.dataTransfer.files); });
+inArq.addEventListener('change', () => tratar(inArq.files));
 
 async function tratar(lista){
   const st = document.getElementById('status');
@@ -450,7 +456,7 @@ function normalizarC3000(listaCsv, iniTxt, frota, nome){
   const brutos = [];
   for(const txt of listaCsv){
     const linhas = txt.split(/\r?\n/);
-    const cab = líneas[0].split(',').map(s=>s.trim()).filter(s=>s);
+    const cab = linhas[0].split(',').map(s=>s.trim()).filter(s=>s);
     const ic = {}; cab.forEach((c,i)=>ic[c]=i);
     const col = (...ns)=>{ for(const nn of ns) if(nn in ic) return ic[nn]; return -1; };
     const iData=col('Date'), iHora=col('Time');
@@ -908,7 +914,7 @@ function gerarQuadsUnidade(u, passoM, inv){
   }
   return quads;
 }
-function gerarDBF(campos, linhas){
+function gerarDBF(campos, líneas){
   const n = líneas.length;
   const larg = campos.reduce((s,c)=>s+c[2],0)+1;
   const cab = 32 + campos.length*32 + 1;
@@ -927,7 +933,7 @@ function gerarDBF(campos, linhas){
   });
   u8[32+campos.length*32]=0x0D;
   let ro = cab;
-  for(const linha of linhas){
+  for(const linha of líneas){
     u8[ro]=32; let co=ro+1;
     campos.forEach((c,ci)=>{
       let txt = String(linha[ci]??'');
