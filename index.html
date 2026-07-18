@@ -32,7 +32,7 @@ main{flex:1;overflow:hidden;position:relative}
 #mapa{width:100%;height:100%}
 .cartao{background:var(--painel);border:1px solid var(--borda);border-radius:10px;padding:14px;margin-bottom:12px}
 .cartao h2{font-size:13px;font-weight:700;color:var(--tinta2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
-#zona-drop{border:2px dashed var(--borda);border-radius:12px;padding:30px 16px;text-align:center;color:var(--tinta2);background:var(--painel);cursor:pointer}
+#zona-drop{border:2px dashed var(--borda);border-radius:12px;padding:30px 16px;text-align:center;color:var(--tinta2);background:var(--painel)}
 #zona-drop.sobre{border-color:var(--verde);background:#eef6ef}
 #zona-drop strong{color:var(--verde);font-size:15px}
 #zona-drop p{font-size:12px;margin-top:6px}
@@ -92,7 +92,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
     <div id="zona-drop">
       <strong>Toque para escolher os .zip das frotas</strong>
       <p>ex.: 1006.zip (C3000) + 1008.zip (TASKDATA ISO-XML) — pode selecionar vários de uma vez</p>
-      <button class="botao" id="btn-buscar">Escolher arquivos</button>
+      <button class="botao" onclick="document.getElementById('arq').click()">Escolher arquivos</button>
       <input type="file" id="arq" multiple accept=".zip,.ZIP">
     </div>
     <div id="status"></div>
@@ -178,32 +178,26 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 'use strict';
 /* =====================================================================
    UNIDADE NORMALIZADA (comum às duas fontes)
+   u = { frota, fonte:'ISO'|'C3000', nome, n,
+         lat:F64, lon:F64, larg:F32(m efetiva; 0 = não aplicando),
+         taxa:F32(L/ha; NaN ausente), vel:F32(km/h; NaN), alt:F32(m; NaN),
+         dataHora(i) -> string,
+         tempo:F64|null (ms p/ detectar gaps; null = sem tempo confiável),
+         head:F32|null (C3000), mask:Int32Array|null, ini|null }
 ===================================================================== */
 const UNIDADES = [];
 const TALHOES = [];
 let mapa=null, camada=null, camadaTalhoes=null;
 const TODAS='*';
 
-/* ================= Entrada e Cliques Corrigidos ================= */
+/* ================= Entrada ================= */
 const inArq = document.getElementById('arq');
 const zona = document.getElementById('zona-drop');
-const btnBuscar = document.getElementById('btn-buscar');
-
-btnBuscar.addEventListener('click', e => {
-  e.stopPropagation();
-  inArq.click();
-});
-
-zona.addEventListener('click', e => {
-  if (e.target.id !== 'arq') {
-    inArq.click();
-  }
-});
-
-zona.addEventListener('dragover', e => { e.preventDefault(); zona.classList.add('sobre'); });
-zona.addEventListener('dragleave', () => zona.classList.remove('sobre'));
-zona.addEventListener('drop', e => { e.preventDefault(); zona.classList.remove('sobre'); tratar(e.dataTransfer.files); });
-inArq.addEventListener('change', () => tratar(inArq.files));
+zona.addEventListener('click', e=>{ if(e.target.tagName!=='BUTTON') inArq.click(); });
+zona.addEventListener('dragover', e=>{e.preventDefault();zona.classList.add('sobre')});
+zona.addEventListener('dragleave', ()=>zona.classList.remove('sobre'));
+zona.addEventListener('drop', e=>{e.preventDefault();zona.classList.remove('sobre');tratar(e.dataTransfer.files)});
+inArq.addEventListener('change', ()=>tratar(inArq.files));
 
 async function tratar(lista){
   const st = document.getElementById('status');
@@ -227,7 +221,7 @@ async function tratar(lista){
   }
 }
 async function carregarZip(zip, frota, st){
-  const xmls={}, bins={}, csvs={}, inis={}, xmlCadastro=[];
+  const xmls={}, bins={}, csvs={}, inis={}, metas={}, pdfs={}, xmlCadastro=[];
   function idJob(caminho, prefixo){
     const partes = caminho.split('/');
     if(partes.length>=2){
@@ -255,9 +249,25 @@ async function carregarZip(zip, frota, st){
     else if(cima.endsWith('_PPD.INI')){
       const id = idJob(caminho, base.replace(/_PPD\.ini$/i,''));
       inis[id] = await z.async('string');
+      (metas[id] = metas[id]||[]).push(await z.async('string'));
+    }
+    else if(cima.endsWith('.PDF')){
+      const mnum = base.match(/(\d+)/);
+      if(mnum && !pdfs[mnum[1]]){
+        const bytes = await z.async('uint8array');
+        if(bytes.length < 20000000) pdfs[mnum[1]] = bytes;
+      }
+    }
+    else if(/\/JOBS\//i.test('/'+caminho) && /\.(ini|xml|txt|json|cfg)$/i.test(base) && !cima.includes('FULLDATA')){
+      // qualquer arquivo texto pequeno na pasta do job pode carregar nomes de fazenda/cliente
+      const id = idJob(caminho, base.replace(/\.[^.]+$/,''));
+      const txt = await z.async('string');
+      if(txt.length < 300000) (metas[id] = metas[id]||[]).push(txt);
     }
   }
+  // cadastro ISO-XML: TLG -> tarefa/talhão/fazenda/cliente + contornos de talhão
   const cad = parseCadastro(xmlCadastro);
+  // ISO-XML
   const nomesTLG = Object.keys(xmls).sort();
   const pfdsUsados = new Set();
   for(const nomeX of nomesTLG){
@@ -276,6 +286,7 @@ async function carregarZip(zip, frota, st){
     }
     bins[base+'.BIN'] = null;
   }
+  // contornos dos talhões efetivamente usados pelas tarefas carregadas
   for(const pid of pfdsUsados){
     const p = cad.pfdM[pid];
     if(p && p.aneis.length){
@@ -283,13 +294,163 @@ async function carregarZip(zip, frota, st){
       TALHOES.push({frota, nome:p.nome, fazenda:fz, aneis:p.aneis});
     }
   }
+  // C3000
   for(const id in csvs){
     st.textContent = frota+' · job '+id+'…';
     await new Promise(r=>setTimeout(r,10));
     const u = normalizarC3000(csvs[id], inis[id]||'', frota, id);
-    if(u){ u.tarefa=''; u.talhao=''; u.fazenda=''; u.cliente=''; UNIDADES.push(u); }
+    if(u){
+      const nomes = acharNomesJob(metas[id]);
+      u.tarefa = '';
+      u.talhao = nomes.talhao || id;      // OS do job no fim, igual ao padrão do ISO
+      u.fazenda = nomes.fazenda || '';
+      u.cliente = nomes.cliente || '';
+      if(!u.fazenda && pdfs[id]){
+        try{
+          const np = await extrairNomesPDF(pdfs[id]);
+          if(np.fazenda) u.fazenda = np.fazenda;
+          if(np.cliente && !u.cliente) u.cliente = np.cliente;
+        }catch(e){}
+      }
+      UNIDADES.push(u);
+    }
   }
 }
+
+
+/* extrai Client/Farm do Job Summary PDF da Topcon (Reports/): infla streams com
+   DecompressionStream, decodifica glifos via CMaps ToUnicode e pareia célula→valor */
+async function inflarBytes(u8){
+  for(const fmt of ['deflate','deflate-raw']){
+    try{
+      const resp = new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream(fmt)));
+      return new Uint8Array(await resp.arrayBuffer());
+    }catch(e){}
+  }
+  return null;
+}
+async function extrairNomesPDF(u8){
+  const dec = new TextDecoder('latin1');
+  const s = dec.decode(u8);
+  const acharObj = num => {
+    const re = new RegExp('(?:^|[\\r\\n])'+num+'\\s+0\\s+obj');
+    const m = re.exec(s);
+    if(!m) return [-1,-1];
+    const ini = m.index + m[0].length;
+    const fim = s.indexOf('endobj', ini);
+    return [ini, fim<0 ? s.length : fim];
+  };
+  const corpoObj = num => { const [a,b] = acharObj(num); return a<0 ? '' : s.substring(a,b); };
+  const hex2txt = h => {
+    let t = '';
+    for(let i=0;i+4<=h.length;i+=4) t += String.fromCharCode(parseInt(h.substring(i,i+4),16));
+    return t;
+  };
+  const cmapCache = {};
+  const lerCMap = numFonte => {
+    if(numFonte in cmapCache) return cmapCache[numFonte];
+    const cm = {};
+    cmapCache[numFonte] = cm;
+    const mu = corpoObj(numFonte).match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if(!mu) return cm;
+    const corpo = corpoObj(+mu[1]);
+    const ms = corpo.match(/stream\r?\n([\s\S]*?)\r?\nendstream/);
+    if(!ms) return cm;
+    const t = ms[1];   // ToUnicode dos PDFs Topcon vem sem compressão
+    for(const bc of t.matchAll(/beginbfchar([\s\S]*?)endbfchar/g))
+      for(const m of bc[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g))
+        cm[parseInt(m[1],16)] = hex2txt(m[2]);
+    for(const br of t.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)){
+      const bloco = br[1];
+      for(const m of bloco.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[((?:\s*<[0-9A-Fa-f]+>)+)\s*\]/g)){
+        const dsts = [...m[3].matchAll(/<([0-9A-Fa-f]+)>/g)];
+        dsts.forEach((dm,k)=>{ cm[parseInt(m[1],16)+k] = hex2txt(dm[1]); });
+      }
+      const semArrays = bloco.replace(/\[[\s\S]*?\]/g, ' ');
+      for(const m of semArrays.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)){
+        const a = parseInt(m[1],16), b = parseInt(m[2],16), base = parseInt(m[3],16);
+        for(let k=a;k<=b && k-a<65536;k++) cm[k] = String.fromCharCode(base + (k-a));
+      }
+    }
+    return cm;
+  };
+  const blocos = [];
+  for(const mp of s.matchAll(/\/Type\s*\/Page\b(?!s)((?:(?!endobj)[\s\S])*)/g)){
+    const corpo = mp[0];
+    const fontes = {};
+    const mrr = corpo.match(/\/Resources\s+(\d+)\s+0\s+R/);
+    let fontDict = '';
+    const alvoDict = mrr ? corpoObj(+mrr[1]) : corpo;
+    const mrf = alvoDict.match(/\/Font\s*<<([\s\S]*?)>>/);
+    if(mrf) fontDict = mrf[1];
+    for(const mf of fontDict.matchAll(/\/(F\d+)\s+(\d+)\s+0\s+R/g))
+      fontes[mf[1]] = lerCMap(+mf[2]);
+    for(const mc of corpo.matchAll(/\/Contents\s+(\d+)\s+0\s+R/g)){
+      const [a,b] = acharObj(+mc[1]);
+      if(a<0) continue;
+      const trecho = s.substring(a,b);
+      const ms = trecho.match(/stream\r?\n/);
+      if(!ms) continue;
+      const iniS = a + ms.index + ms[0].length;
+      const fimS = s.indexOf('endstream', iniS);
+      if(fimS<0) continue;
+      let fimReal = fimS;
+      while(fimReal>iniS && (s[fimReal-1]==='\n'||s[fimReal-1]==='\r')) fimReal--;
+      const inflado = await inflarBytes(u8.subarray(iniS, fimReal));
+      if(!inflado) continue;
+      const conteudo = dec.decode(inflado);
+      for(const bt of conteudo.matchAll(/BT([\s\S]*?)ET/g)){
+        let cm = {}, texto = '';
+        for(const tok of bt[1].matchAll(/\/(F\d+)\s+[\d.]+\s+Tf|<([0-9A-Fa-f]+)>\s*Tj/g)){
+          if(tok[1]) cm = fontes[tok[1]] || {};
+          else {
+            const h = tok[2];
+            for(let k=0;k+4<=h.length;k+=4){
+              const ch = cm[parseInt(h.substring(k,k+4),16)];
+              if(ch !== undefined) texto += ch;
+            }
+          }
+        }
+        texto = texto.replace(/\t/g,' ').trim();
+        if(texto) blocos.push(texto);
+      }
+    }
+    if(blocos.includes('Farm')) break;   // primeira página já basta
+  }
+  const resultado = {fazenda:'', cliente:''};
+  for(const [chave, alvo] of [['Farm','fazenda'],['Client','cliente']]){
+    const i = blocos.indexOf(chave);
+    if(i>=0 && i+1<blocos.length) resultado[alvo] = blocos[i+1].trim();
+  }
+  return resultado;
+}
+/* caça nomes de fazenda/cliente/talhão em textos de metadados do job (INI/XML variados) */
+function acharNomesJob(textos){
+  const achado = {fazenda:'', cliente:'', talhao:''};
+  const regras = [
+    ['fazenda', /(?:^|[\n\r;])\s*(?:Farm(?:Name)?|Fazenda)\s*=\s*([^\r\n;]+)/i],
+    ['fazenda', /<\s*Farm\b[^>]*?(?:name|Name)\s*=\s*"([^"]+)"/],
+    ['cliente', /(?:^|[\n\r;])\s*(?:Client(?:Name)?|Cliente)\s*=\s*([^\r\n;]+)/i],
+    ['cliente', /<\s*Client\b[^>]*?(?:name|Name)\s*=\s*"([^"]+)"/],
+    ['talhao',  /(?:^|[\n\r;])\s*(?:Field(?:Name)?|Campo|Talhao|Talhão)\s*=\s*([^\r\n;]+)/i],
+    ['talhao',  /<\s*Field\b[^>]*?(?:name|Name)\s*=\s*"([^"]+)"/],
+    ['fazenda', /\[Farm\][^\[]*?\bName\s*=\s*([^\r\n;]+)/i],
+    ['cliente', /\[Client\][^\[]*?\bName\s*=\s*([^\r\n;]+)/i],
+    ['talhao',  /\[Field\][^\[]*?\bName\s*=\s*([^\r\n;]+)/i]
+  ];
+  for(const txt of textos||[]){
+    for(const [chave, re] of regras){
+      if(achado[chave]) continue;
+      const m = txt.match(re);
+      if(m){
+        const v = m[1].trim();
+        if(v && v !== '0' && v.toLowerCase() !== 'none') achado[chave] = v;
+      }
+    }
+  }
+  return achado;
+}
+/* cadeia ISO-XML: TSK(B=nome,E=pfd) -> PFD(C=nome,F=frm,+PLN/LSG/PNT) -> FRM(B,I=ctr) -> CTR(B) */
 function parseCadastro(textos){
   const parser = new DOMParser();
   const ctr={}, frmM={}, pfdM={}, porTLG={};
@@ -335,6 +496,7 @@ function normalizarISO(xmlTxt, buf, frota, nome){
   const doc = new DOMParser().parseFromString(xmlTxt, 'text/xml');
   const tim = doc.querySelector('TIM');
   if(!tim) return null;
+  // layout
   const L = {timA: tim.getAttribute('A')==='', ptn:[], dlvs:[]};
   const ptn = tim.querySelector('PTN');
   const camposP = [['A','i4'],['B','i4'],['C','i4'],['D','u1'],['E','u2'],['F','u2'],['G','u1'],['H','u4'],['I','u2']];
@@ -343,6 +505,7 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     if(v!==null && v==='') L.ptn.push([attr,tipo]);
   }
   tim.querySelectorAll('DLV').forEach(d=>L.dlvs.push({ddi:d.getAttribute('A').toUpperCase(), det:d.getAttribute('C')}));
+  // parse binário colunar (2 passadas)
   const dv = new DataView(buf);
   const fim = buf.byteLength;
   const fixo = (L.timA?6:0) + L.ptn.reduce((s,c)=>s+TAM[c[1]],0);
@@ -373,6 +536,7 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     for(let k=0;k<nd;k++){ dlvIdx[p]=dv.getUint8(o); dlvVal[p]=dv.getInt32(o+1,true); o+=5; p++; }
   }
   dlvPtr[n]=p;
+  // melhores índices por DDI (o que mais varia)
   function melhorDDI(ddiNum){
     const cand=[];
     L.dlvs.forEach((d,i)=>{ if(parseInt(d.ddi,16)===ddiNum) cand.push(i); });
@@ -401,6 +565,7 @@ function normalizarISO(xmlTxt, buf, frota, nome){
   const cLarg = colFF(melhorDDI(0x0043));
   const cWS = colFF(melhorDDI(0x008D));
   const cTaxa = colFF(melhorDDI(0x0002));
+  // colunas normalizadas
   const larg=new Float32Array(n), taxa=new Float32Array(n).fill(NaN);
   const vel=new Float32Array(n).fill(NaN), alt=new Float32Array(n).fill(NaN);
   const tempo=new Float64Array(n);
@@ -413,6 +578,7 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     larg[i]=lg;
     if(cTaxa && !isNaN(cTaxa[i])) taxa[i]=cTaxa[i]*1e-4;
     if(temAlt) alt[i]=altMM[i]/1000;
+    // velocidade GPS: janela de ~1 s
     while(j<i && tempo[i]-tempo[j] > 1200) j++;
     const dt = (tempo[i]-tempo[j])/1000;
     if(dt>0.3 && !(lat[i]===0&&lon[i]===0) && !(lat[j]===0&&lon[j]===0)){
@@ -453,6 +619,7 @@ function parseINI(txt){
 }
 function normalizarC3000(listaCsv, iniTxt, frota, nome){
   const ini = parseINI(iniTxt);
+  // parse de todos os CSVs da OS
   const brutos = [];
   for(const txt of listaCsv){
     const linhas = txt.split(/\r?\n/);
@@ -495,6 +662,7 @@ function normalizarC3000(listaCsv, iniTxt, frota, nome){
   const head=new Float32Array(n);
   const mask=new Int32Array(n);
   const dtStr=new Array(n);
+  // largura efetiva por mask (cache)
   const cacheLarg = new Map();
   function largDe(mk){
     if(cacheLarg.has(mk)) return cacheLarg.get(mk);
@@ -537,6 +705,7 @@ function trechosMask(mk, ini, inv){
   }
   return out;
 }
+/* cadeias de amostras agregadas p/ uma unidade */
 function construirCadeias(u, corArr, passoM, inv){
   const cadeias=[]; let atual=null, prev=null, areaM2=0, proj=null;
   function fechar(){ if(atual && atual.length>=2) cadeias.push(atual); atual=null; prev=null; }
@@ -559,6 +728,7 @@ function construirCadeias(u, corArr, passoM, inv){
     if(!atual) atual=[];
     if(prev && atual.length){
       if(u.mask && mk!==prev.mk){
+        // mask mudou: fecha e recomeça com ponte
         const ponte = {...prev, mk, larg:lg};
         areaM2 += Math.hypot(x-ponte.x,y-ponte.y)*(lg+prev.larg)/2;
         fechar();
@@ -593,7 +763,7 @@ function montarTabelas(){
   const tb = document.querySelector('#tab-unids tbody');
   tb.innerHTML='';
   for(const u of UNIDADES){
-    const fzTal = (u.fazenda||u.talhao) ? (u.fazenda+(u.talhao?' · '+u.talhao:'')) : '—';
+    const fzTal = [u.fazenda, u.talhao].filter(Boolean).join(' · ') || '—';
     tb.innerHTML += '<tr><td><span class="tag frota">'+u.frota+'</span></td>'+
       '<td><span class="tag">'+u.nome+'</span></td><td>'+u.fonte+'</td>'+
       '<td style="font-family:inherit">'+fzTal+'</td>'+
@@ -609,6 +779,7 @@ function montarSeletores(){
     .concat(fs.map(f=>'<option value="'+f+'">Frota '+f+'</option>'));
   document.getElementById('sel-frota').innerHTML = ops.join('');
   document.getElementById('exp-frota').innerHTML = ops.join('');
+  // dias presentes (amostragem: primeiro, último e passos de 500 registros)
   const dias = new Set();
   for(const u of UNIDADES){
     dias.add(u.dataHora(0).substring(0,10));
@@ -710,6 +881,7 @@ function desenharMapa(){
   const corSel = document.getElementById('sel-cor').value;
   const inv = document.getElementById('chk-inv').checked;
   const metrica = (corSel!=='frota' && corSel!=='-') ? corSel : null;
+  // escala global entre todas as unidades exibidas
   let mn=0, mx=0;
   if(metrica){
     const vals=[];
@@ -745,6 +917,7 @@ function desenharMapa(){
         else if(metrica && mx>mn) cor = corGradiente((bucket(cadeia[ini].cor)+0.5)/NB);
         const aneis = [];
         if(u.mask && u.ini && u.ini.secoes.length){
+          // sub-faixas por seção (heading do implemento)
           const tre = trechosMask(cadeia[ini].mk, u.ini, inv);
           for(const [o1,o2] of tre){
             const anel = [];
@@ -759,6 +932,7 @@ function desenharMapa(){
             aneis.push(anel);
           }
         } else {
+          // faixa centrada (perpendicular ao traçado)
           const sub = cadeia.slice(ini, fim+1);
           const {L:lados, R} = bordas(sub);
           const anel = [];
@@ -779,6 +953,7 @@ function desenharMapa(){
   }
   camada = L.layerGroup(pols).addTo(mapa);
   if(limites) mapa.fitBounds(limites.pad(0.05));
+  // legenda
   let html = '<b>'+(areaTotal/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b> (com sobreposição) · '+pols.length+' trechos';
   if(corSel==='frota'){
     html = frotas().filter(f=>areaFrota[f]).map(f=>
@@ -793,7 +968,7 @@ function abrirPopup(e){
   const u = e.target._u, i = e.target._idx;
   const fx = (v,d,suf)=> isNaN(v)?'—':v.toFixed(d)+suf;
   let extra = '';
-  if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+(u.fazenda||'—')+' · '+(u.talhao||'—')+'</b></td></tr>';
+  if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+([u.fazenda,u.talhao].filter(Boolean).join(' · '))+'</b></td></tr>';
   if(u.tarefa) extra += '<tr><td>Tarefa</td><td class="num">'+u.tarefa+'</td></tr>';
   const html = '<b>Frota '+u.frota+' · '+u.nome+'</b> ('+u.fonte+')<br>'+u.dataHora(i)+'<br>'+
     u.lat[i].toFixed(7)+', '+u.lon[i].toFixed(7)+'<table>'+extra+
@@ -822,6 +997,7 @@ async function exportar(){
     const dSel = document.getElementById('exp-dia').value;
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
+    // gera quads das unidades filtradas por frota, depois filtra por dia
     let quads = [];
     for(const u of UNIDADES){
       if(fSel!==TODAS && u.frota!==fSel) continue;
@@ -830,6 +1006,7 @@ async function exportar(){
     if(dSel!==TODAS)
       quads = quads.filter(q=> q.u.dataHora(q.idx).substring(0,10)===dSel);
     if(!quads.length) throw new Error('Nenhum polígono no filtro escolhido.');
+    // agrupa conforme a separação
     const chave = q => {
       if(sep==='frota') return 'FROTA_'+q.u.frota;
       if(sep==='fazenda') return 'FAZ_'+nomeSeguro(q.u.fazenda||'SEM_FAZENDA');
@@ -914,8 +1091,8 @@ function gerarQuadsUnidade(u, passoM, inv){
   }
   return quads;
 }
-function gerarDBF(campos, líneas){
-  const n = líneas.length;
+function gerarDBF(campos, linhas){
+  const n = linhas.length;
   const larg = campos.reduce((s,c)=>s+c[2],0)+1;
   const cab = 32 + campos.length*32 + 1;
   const buf = new ArrayBuffer(cab + n*larg + 1);
@@ -933,7 +1110,7 @@ function gerarDBF(campos, líneas){
   });
   u8[32+campos.length*32]=0x0D;
   let ro = cab;
-  for(const linha of líneas){
+  for(const linha of linhas){
     u8[ro]=32; let co=ro+1;
     campos.forEach((c,ci)=>{
       let txt = String(linha[ci]??'');
