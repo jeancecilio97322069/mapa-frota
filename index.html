@@ -453,6 +453,26 @@ function acharNomesJob(textos){
   return achado;
 }
 /* cadeia ISO-XML: TSK(B=nome,E=pfd) -> PFD(C=nome,F=frm,+PLN/LSG/PNT) -> FRM(B,I=ctr) -> CTR(B) */
+/* Saneia um anel de contorno: remove coordenadas invalidas/(0,0) e quebra o anel
+   onde ha salto > SALTO_MAX_M entre vertices consecutivos (vertice espurio no
+   TASKDATA gera reta atravessando o mapa). Retorna lista de aneis validos. */
+const SALTO_MAX_M = 2000;
+function sanearAnel(pts){
+  const ok = pts.filter(p =>
+    isFinite(p[0]) && isFinite(p[1]) &&
+    Math.abs(p[0])<=90 && Math.abs(p[1])<=180 &&
+    !(p[0]===0 && p[1]===0));
+  if(ok.length<3) return [];
+  const kLat = 111320, kLon = 111320*Math.cos(ok[0][0]*Math.PI/180);
+  const runs=[]; let run=[ok[0]];
+  for(let i=1;i<ok.length;i++){
+    const d = Math.hypot((ok[i][0]-ok[i-1][0])*kLat, (ok[i][1]-ok[i-1][1])*kLon);
+    if(d>SALTO_MAX_M){ if(run.length>=3) runs.push(run); run=[]; }
+    run.push(ok[i]);
+  }
+  if(run.length>=3) runs.push(run);
+  return runs;
+}
 function parseCadastro(textos){
   const parser = new DOMParser();
   const ctr={}, frmM={}, pfdM={}, porTLG={};
@@ -466,9 +486,9 @@ function parseCadastro(textos){
         const anel=[];
         l.querySelectorAll('PNT').forEach(p=>{
           const la=parseFloat(p.getAttribute('C')), lo=parseFloat(p.getAttribute('D'));
-          if(isFinite(la)&&isFinite(lo)) anel.push([la,lo]);
+          anel.push([la,lo]);
         });
-        if(anel.length>=3) aneis.push(anel);
+        for(const r of sanearAnel(anel)) aneis.push(r);
       });
       pfdM[e.getAttribute('A')]={nome:e.getAttribute('C')||'', frm:e.getAttribute('F')||'', aneis};
     });
