@@ -112,6 +112,8 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
     <div id="painel-mapa">
       <label>Exibir</label>
       <select id="sel-frota"></select>
+      <label>Dia</label>
+      <select id="sel-dia"></select>
       <label>Colorir por</label>
       <select id="sel-cor">
         <option value="frota" selected>Frota (cor por trator)</option>
@@ -706,12 +708,13 @@ function trechosMask(mk, ini, inv){
   return out;
 }
 /* cadeias de amostras agregadas p/ uma unidade */
-function construirCadeias(u, corArr, passoM, inv){
+function construirCadeias(u, corArr, passoM, inv, keep){
   const cadeias=[]; let atual=null, prev=null, areaM2=0, proj=null;
   function fechar(){ if(atual && atual.length>=2) cadeias.push(atual); atual=null; prev=null; }
   for(let i=0;i<u.n;i++){
     const la=u.lat[i], lo=u.lon[i];
     if(la===0 && lo===0){ fechar(); continue; }
+    if(keep && !keep(i)){ fechar(); continue; }
     const lg = u.larg[i];
     if(lg<=0){ fechar(); continue; }
     if(!proj) proj = projetor(la);
@@ -787,9 +790,10 @@ function montarSeletores(){
     for(let i=0;i<u.n;i+=500) dias.add(u.dataHora(i).substring(0,10));
   }
   const lista = [...dias].filter(d=>d.length===10).sort();
-  document.getElementById('exp-dia').innerHTML =
-    '<option value="'+TODAS+'">Todos os dias</option>'+
+  const opsDia = '<option value="'+TODAS+'">Todos os dias</option>'+
     lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
+  document.getElementById('exp-dia').innerHTML = opsDia;
+  document.getElementById('sel-dia').innerHTML = opsDia;
 }
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
@@ -897,12 +901,18 @@ function desenharMapa(){
   const render = L.canvas({padding:.3});
   const pols=[]; let limites=null; let areaTotal=0;
   const areaFrota = {};
+  const areaFaz = {};
+  const diaSel = document.getElementById('sel-dia').value;
   const opac = opacidadeFaixa();
   for(const u of unids){
     const corArr = metrica ? u[metrica] : null;
-    const {cadeias, areaM2, proj} = construirCadeias(u, corArr, 2, inv);
+    const keep = (diaSel && diaSel!==TODAS)
+      ? (i => u.dataHora(i).substring(0,10)===diaSel) : null;
+    const {cadeias, areaM2, proj} = construirCadeias(u, corArr, 2, inv, keep);
     areaTotal += areaM2;
     areaFrota[u.frota] = (areaFrota[u.frota]||0) + areaM2;
+    const fzNome = u.fazenda || 'Sem fazenda';
+    areaFaz[fzNome] = (areaFaz[fzNome]||0) + areaM2;
     for(const cadeia of cadeias){
       let ini=0;
       for(let i=1;i<=cadeia.length;i++){
@@ -955,6 +965,13 @@ function desenharMapa(){
   if(limites) mapa.fitBounds(limites.pad(0.05));
   // legenda
   let html = '<b>'+(areaTotal/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b> (com sobreposição) · '+pols.length+' trechos';
+  const fazendas = Object.keys(areaFaz).filter(f=>areaFaz[f]>0).sort();
+  if(fazendas.length){
+    html = fazendas.map(f=>
+      f+' — <b>'+(areaFaz[f]/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b>'
+    ).join('<br>')+'<br><div style="border-top:1px solid #ddd;margin:4px 0"></div>'+html;
+    if(diaSel && diaSel!==TODAS) html = '<b>Dia '+diaSel.split('-').reverse().join('/')+'</b><br>'+html;
+  }
   if(corSel==='frota'){
     html = frotas().filter(f=>areaFrota[f]).map(f=>
       '<span class="chip" style="background:'+corFrota(f)+'"></span>'+f+' — '+(areaFrota[f]/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha'
@@ -1203,7 +1220,7 @@ document.querySelectorAll('.aba').forEach(b=>{
     }
   });
 });
-for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
+for(const id of ['sel-frota','sel-dia','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
 document.getElementById('chk-talhoes').addEventListener('change', desenharTalhoes);
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
