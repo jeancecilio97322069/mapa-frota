@@ -63,6 +63,9 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 #painel-mapa .chk{font-size:12px;padding:4px 0}
 #painel-mapa .chk input{width:16px;height:16px}
 .leaflet-popup-content{font-family:var(--mono);font-size:11px;margin:10px}
+.rotulo-faz{background:transparent;border:none;box-shadow:none;font-weight:800;font-size:13px;
+  color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,1px 1px 2px #000}
+.rotulo-faz::before{display:none}
 .leaflet-popup-content table td{padding:2px 6px;font-size:10px;border:none}
 #recolher{position:absolute;top:10px;right:10px;z-index:1001;background:var(--painel);border:1px solid var(--borda);
   border-radius:8px;width:36px;height:36px;font-size:17px;cursor:pointer;display:none}
@@ -96,6 +99,17 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <input type="file" id="arq" multiple accept=".zip,.ZIP">
     </div>
     <div id="status"></div>
+    <div class="cartao" id="cartao-perim">
+      <h2>Perímetros das fazendas (SHP)</h2>
+      <p style="font-size:12px;color:#777;margin:6px 0 10px">Importe uma vez o shapefile dos perímetros (.shp + .dbf, ou .zip com eles). Fica salvo neste navegador: ao abrir o link, os perímetros já aparecem — importe só a pintura.</p>
+      <button class="botao" onclick="document.getElementById('arq-perim').click()">Importar perímetros (SHP)</button>
+      <button class="botao" onclick="document.getElementById('arq-talhshp').click()">Importar talhões (SHP)</button>
+      <button class="botao" id="btn-perim-limpar" style="display:none">Remover salvos</button>
+      <input type="file" id="arq-perim" multiple accept=".shp,.dbf,.prj,.zip,.SHP,.DBF,.PRJ,.ZIP" style="display:none">
+      <input type="file" id="arq-talhshp" multiple accept=".shp,.dbf,.prj,.zip,.SHP,.DBF,.PRJ,.ZIP" style="display:none">
+      <div id="status-perim" style="font-size:12px;color:#555;margin-top:8px"></div>
+      <div id="status-talhshp" style="font-size:12px;color:#555;margin-top:4px"></div>
+    </div>
     <div class="cartao" id="cartao-unids" style="display:none">
       <h2>Frotas e unidades carregadas</h2>
       <div style="overflow-x:auto"><table id="tab-unids">
@@ -146,7 +160,29 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="topo">Topográfico</option>
       </select>
       <div class="chk"><input type="checkbox" id="chk-inv"><span>Inverter seções (C3000)</span></div>
-      <div class="chk" id="grupo-talhoes" style="display:none"><input type="checkbox" id="chk-talhoes" checked><span>Contorno dos talhões</span></div>
+      <div class="chk" id="grupo-talhoes" style="display:none"><input type="checkbox" id="chk-talhoes" checked><span id="lbl-talhoes">Contorno dos talhões</span></div>
+      <div class="chk" id="grupo-perim" style="display:none"><input type="checkbox" id="chk-perim" checked><span id="lbl-perim">Perímetro das fazendas</span></div>
+      <div id="opcoes-perim" style="display:none">
+        <label>Cor do perímetro</label>
+        <input type="color" id="cor-perim" value="#ff9100" style="width:100%;height:30px;border:1px solid #ccc;border-radius:6px;padding:2px;background:#fff">
+        <label>Largura do traço</label>
+        <select id="larg-perim">
+          <option value="1.5">Fino</option>
+          <option value="2.5" selected>Normal</option>
+          <option value="4">Grosso</option>
+          <option value="6">Extra grosso</option>
+        </select>
+        <div class="chk"><input type="checkbox" id="chk-nomes-faz"><span>Nome da fazenda no mapa</span></div>
+        <label>Atributo do nome</label>
+        <select id="sel-attr-nome"><option value="auto">Automático</option></select>
+      </div>
+      <div class="chk" id="grupo-talhshp" style="display:none"><input type="checkbox" id="chk-talhshp"><span id="lbl-talhshp">Talhões (SHP)</span></div>
+      <div id="opcoes-talh" style="display:none">
+        <div class="chk"><input type="checkbox" id="chk-nomes-talh"><span>Nome do talhão no mapa</span></div>
+        <label>Atributo do talhão</label>
+        <select id="sel-attr-talh"><option value="auto">Automático</option></select>
+      </div>
+      <div id="status-camada" style="font-size:10px;font-family:var(--mono);color:var(--ambar);min-height:12px;margin-top:6px"></div>
       <div id="legenda"></div>
     </div>
   </div>
@@ -833,6 +869,7 @@ function garantirMapa(){
   rotulosSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
   trocarFundo();
   mapa.setView([-22.4,-50.6], 6);
+  desenharCamadasShp(true);
 }
 function trocarFundo(){
   if(!mapa) return;
@@ -900,7 +937,9 @@ function desenharMapa(){
   if(camada){ mapa.removeLayer(camada); camada=null; }
   const unids = unidadesVisiveis();
   document.getElementById('grupo-talhoes').style.display = TALHOES.length?'flex':'none';
+  document.getElementById('lbl-talhoes').textContent = 'Contorno dos talhões'+(TALHOES.length?' · '+TALHOES.length.toLocaleString('pt-BR'):'');
   desenharTalhoes();
+  desenharCamadasShp();
   if(!unids.length){ leg.innerHTML=''; return; }
   const corSel = document.getElementById('sel-cor').value;
   const inv = document.getElementById('chk-inv').checked;
@@ -1227,6 +1266,362 @@ async function entregarArquivo(blob, arqNome){
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
 }
 
+/* ============ Perímetros de fazenda (SHP) + persistência ============ */
+const PERIMETROS = [];
+const TALHOES_SHP = [];
+let camadaPerim = null, camadaTalhShp = null;
+const ESTILO_SHP = { cor:'#ff9100', larg:2.5, nomes:false, campoNome:'auto',
+                     nomesTalh:false, campoNomeTalh:'auto',
+                     /* visibilidade lembrada entre sessoes; talhoes SHP começam desligados p/ abrir rapido */
+                     verPerim:true, verTalhShp:false, verTalhoes:true };
+
+function idbAbrir(){
+  return new Promise((res,rej)=>{
+    if(typeof indexedDB==='undefined') return rej(new Error('sem IndexedDB'));
+    const rq = indexedDB.open('mapa_frota_db',1);
+    rq.onupgradeneeded = ()=>rq.result.createObjectStore('kv');
+    rq.onsuccess = ()=>res(rq.result);
+    rq.onerror = ()=>rej(rq.error);
+  });
+}
+async function idbSet(ch,v){ const db=await idbAbrir(); return new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').put(v,ch); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+async function idbGet(ch){ const db=await idbAbrir(); return new Promise((res,rej)=>{ const rq=db.transaction('kv').objectStore('kv').get(ch); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); }); }
+async function idbDel(ch){ const db=await idbAbrir(); return new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').delete(ch); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+
+/* .shp: registros Polygon (5/15/25) -> por registro, lista de anéis com pares [x,y] crus */
+function parseShp(ab){
+  const dv=new DataView(ab);
+  if(dv.getInt32(0,false)!==9994) throw new Error('.shp inválido (assinatura).');
+  const fim=dv.getInt32(24,false)*2;
+  const formas=[]; let off=100;
+  while(off+8<=fim && off+8<=ab.byteLength){
+    const clen=dv.getInt32(off+4,false)*2; off+=8;
+    if(off+4>ab.byteLength) break;
+    const tipo=dv.getInt32(off,true);
+    if((tipo===5||tipo===15||tipo===25) && clen>=44){
+      const nParts=dv.getInt32(off+36,true), nPts=dv.getInt32(off+40,true);
+      const pOff=off+44, ptOff=pOff+4*nParts;
+      const partes=[]; for(let i=0;i<nParts;i++) partes.push(dv.getInt32(pOff+4*i,true));
+      partes.push(nPts);
+      const aneis=[];
+      for(let p=0;p<nParts;p++){
+        const anel=[];
+        for(let i=partes[p];i<partes[p+1];i++){
+          anel.push([dv.getFloat64(ptOff+16*i,true), dv.getFloat64(ptOff+16*i+8,true)]);
+        }
+        if(anel.length>=3) aneis.push(anel);
+      }
+      formas.push(aneis);
+    } else formas.push(null);
+    off+=clen;
+  }
+  return formas;
+}
+
+/* .dbf: nomes dos campos e registros como texto */
+function parseDbf(ab){
+  const dv=new DataView(ab), dec=new TextDecoder('latin1');
+  const n=dv.getUint32(4,true), cab=dv.getUint16(8,true), reg=dv.getUint16(10,true);
+  const campos=[]; let o=32;
+  while(o+32<=cab && dv.getUint8(o)!==0x0D){
+    const nome=dec.decode(new Uint8Array(ab,o,11)).replace(/\0[\s\S]*$/,'').trim();
+    campos.push({nome, tipo:String.fromCharCode(dv.getUint8(o+11)), tam:dv.getUint8(o+16)});
+    o+=32;
+  }
+  const regs=[];
+  for(let r=0;r<n;r++){
+    let ro=cab+r*reg+1; if(ro+reg-1>ab.byteLength) break;
+    const obj={};
+    for(const c of campos){ obj[c.nome]=dec.decode(new Uint8Array(ab,ro,c.tam)).trim(); ro+=c.tam; }
+    regs.push(obj);
+  }
+  return {campos,regs};
+}
+function campoDoNome(campos){
+  const cs=campos.filter(c=>c.tipo==='C');
+  const m=cs.find(c=>/FAZ|NOME|NAME|PROP|IMOVEL|TALH?A?O?/i.test(c.nome));
+  return (m||cs[0]||{}).nome||null;
+}
+
+/* .prj: WGS84 geográfico ou UTM (Transverse Mercator) */
+function infoPrj(txt){
+  if(!txt) return null;
+  if(/PROJCS/i.test(txt) && /Transverse_?Mercator/i.test(txt)){
+    const cm=/central_meridian"?\s*,\s*(-?\d+(?:\.\d+)?)/i.exec(txt);
+    const fn=/false_northing"?\s*,\s*(\d+(?:\.\d+)?)/i.exec(txt);
+    const k0=/scale_factor"?\s*,\s*(\d+(?:\.\d+)?)/i.exec(txt);
+    return {cm:cm?parseFloat(cm[1]):null, fn:fn?parseFloat(fn[1]):0, k0:k0?parseFloat(k0[1]):0.9996};
+  }
+  return {geo:true};
+}
+/* UTM -> lat/lon (WGS84/SIRGAS2000) */
+function utmParaLL(x,y,cmDeg,fnorte,k0){
+  const a=6378137, f=1/298.257223563, e2=f*(2-f), ep2=e2/(1-e2);
+  const M=(y-(fnorte||0))/(k0||0.9996);
+  const mu=M/(a*(1-e2/4-3*e2*e2/64-5*e2*e2*e2/256));
+  const s1=Math.sqrt(1-e2), e1=(1-s1)/(1+s1);
+  const fp=mu+(3*e1/2-27*Math.pow(e1,3)/32)*Math.sin(2*mu)
+             +(21*e1*e1/16-55*Math.pow(e1,4)/32)*Math.sin(4*mu)
+             +(151*Math.pow(e1,3)/96)*Math.sin(6*mu)
+             +(1097*Math.pow(e1,4)/512)*Math.sin(8*mu);
+  const sf=Math.sin(fp), cf=Math.cos(fp), tf=Math.tan(fp);
+  const C1=ep2*cf*cf, T1=tf*tf;
+  const R1=a*(1-e2)/Math.pow(1-e2*sf*sf,1.5), N1=a/Math.sqrt(1-e2*sf*sf);
+  const D=(x-500000)/(N1*(k0||0.9996));
+  const lat=fp-(N1*tf/R1)*(D*D/2
+      -(5+3*T1+10*C1-4*C1*C1-9*ep2)*Math.pow(D,4)/24
+      +(61+90*T1+298*C1+45*T1*T1-252*ep2-3*C1*C1)*Math.pow(D,6)/720);
+  const lon=cmDeg*Math.PI/180+(D-(1+2*T1+C1)*Math.pow(D,3)/6
+      +(5-2*C1+28*T1-3*C1*C1+8*ep2+24*T1*T1)*Math.pow(D,5)/120)/cf;
+  return [lat*180/Math.PI, lon*180/Math.PI];
+}
+
+/* conjuntos: [{shp:ArrayBuffer, dbf:ArrayBuffer|null, prj:string|null}] -> entradas {nome,aneis} */
+function montarPerimetros(conjuntos){
+  const saida=[];
+  for(const cj of conjuntos){
+    const formas=parseShp(cj.shp);
+    let nomes=[], regsAll=[];
+    if(cj.dbf){ try{ const d=parseDbf(cj.dbf); regsAll=d.regs; const c=campoDoNome(d.campos); nomes=c?d.regs.map(r=>r[c]||''):[]; }catch(e){} }
+    const prj=infoPrj(cj.prj);
+    for(let i=0;i<formas.length;i++){
+      const f=formas[i]; if(!f) continue;
+      const primeiro=f[0]&&f[0][0];
+      const projetado = primeiro && (Math.abs(primeiro[0])>180 || Math.abs(primeiro[1])>90);
+      let conv;
+      if(!projetado){ conv=p=>[p[1],p[0]]; }
+      else {
+        if(!prj || prj.geo || prj.cm===null)
+          throw new Error('Shapefile em coordenadas projetadas sem .prj UTM legível. Exporte em WGS84 ou inclua o .prj.');
+        conv=p=>utmParaLL(p[0],p[1],prj.cm,prj.fn,prj.k0);
+      }
+      const aneis=[];
+      for(const anel of f){
+        const ll=anel.map(conv).filter(p=>isFinite(p[0])&&isFinite(p[1])&&Math.abs(p[0])<=90&&Math.abs(p[1])<=180&&!(p[0]===0&&p[1]===0));
+        if(ll.length>=3) aneis.push(ll);
+      }
+      if(aneis.length) saida.push({nome:(nomes[i]||'').trim(), attrs:regsAll[i]||null, aneis});
+    }
+  }
+  return saida;
+}
+
+function statusShp(tipo, msg){
+  const perim = tipo==='perim';
+  const el=document.getElementById(perim?'status-perim':'status-talhshp');
+  const arr = perim?PERIMETROS:TALHOES_SHP;
+  const rot = perim?'perímetro(s)':'talhão(ões)';
+  el.textContent = msg!==undefined ? msg :
+    (arr.length ? arr.length+' '+rot+' salvos neste navegador.' : (perim?'Nenhum perímetro salvo.':''));
+  document.getElementById('btn-perim-limpar').style.display =
+    (PERIMETROS.length||TALHOES_SHP.length)?'inline-block':'none';
+}
+
+async function adicionarPerimetros(lista, tipo){
+  tipo = tipo||'perim';
+  try{
+    const brutos={};
+    for(const f of lista){
+      const nm=f.name.toLowerCase();
+      if(nm.endsWith('.zip')){
+        const zip=await JSZip.loadAsync(f);
+        for(const caminho in zip.files){
+          const z=zip.files[caminho]; if(z.dir) continue;
+          const zn=caminho.toLowerCase();
+          const base=caminho.replace(/\.[^.]+$/,'').toLowerCase();
+          brutos[base]=brutos[base]||{};
+          if(zn.endsWith('.shp')) brutos[base].shp=await z.async('arraybuffer');
+          else if(zn.endsWith('.dbf')) brutos[base].dbf=await z.async('arraybuffer');
+          else if(zn.endsWith('.prj')) brutos[base].prj=await z.async('string');
+        }
+      } else {
+        const base=f.name.replace(/\.[^.]+$/,'').toLowerCase();
+        brutos[base]=brutos[base]||{};
+        if(nm.endsWith('.shp')) brutos[base].shp=await f.arrayBuffer();
+        else if(nm.endsWith('.dbf')) brutos[base].dbf=await f.arrayBuffer();
+        else if(nm.endsWith('.prj')) brutos[base].prj=await f.text();
+      }
+    }
+    const conjuntos=Object.values(brutos).filter(b=>b.shp);
+    if(!conjuntos.length) throw new Error('Nenhum .shp encontrado nos arquivos escolhidos.');
+    const novos=montarPerimetros(conjuntos);
+    if(!novos.length) throw new Error('Nenhum polígono válido no shapefile.');
+    const perim = tipo==='perim';
+    const arr = perim?PERIMETROS:TALHOES_SHP;
+    arr.length=0; arr.push(...novos);
+    try{ await idbSet(perim?'perimetros':'talhoes_shp', JSON.parse(JSON.stringify(arr))); }catch(e){}
+    popularSelectAtributos(); aplicarNomes();
+    const colunas=new Set();
+    for(const nv of novos) if(nv.attrs) Object.keys(nv.attrs).forEach(k=>colunas.add(k));
+    const infoCol = colunas.size ? ' Colunas: '+[...colunas].sort().join(', ')+'.'
+                                 : ' ATENÇÃO: nenhum .dbf pareado — inclua o .dbf junto para ter os nomes.';
+    statusShp(tipo, novos.length+' '+(perim?'perímetro(s)':'talhão(ões)')+' importados e salvos.'+infoCol);
+    desenharCamadasShp(true);
+  }catch(err){
+    statusShp(tipo, 'Erro: '+(err&&err.message?err.message:err));
+  }finally{
+    document.getElementById(tipo==='perim'?'arq-perim':'arq-talhshp').value='';
+  }
+}
+
+function limitesPerimetros(){
+  let b=null;
+  const tudo = PERIMETROS.concat(TALHOES_SHP);
+  for(const p of tudo) for(const anel of p.aneis) for(const ll of anel){
+    if(!b) b=L.latLngBounds(ll,ll); else b.extend(ll);
+  }
+  return b;
+}
+function aplicarEstiloControles(){
+  document.getElementById('chk-perim').checked   = ESTILO_SHP.verPerim   !== false;
+  document.getElementById('chk-talhshp').checked = ESTILO_SHP.verTalhShp === true;
+  document.getElementById('chk-talhoes').checked = ESTILO_SHP.verTalhoes !== false;
+  document.getElementById('cor-perim').value = ESTILO_SHP.cor;
+  document.getElementById('larg-perim').value = String(ESTILO_SHP.larg);
+  document.getElementById('chk-nomes-faz').checked = !!ESTILO_SHP.nomes;
+  const sel=document.getElementById('sel-attr-nome');
+  if([...sel.options].some(o=>o.value===ESTILO_SHP.campoNome)) sel.value=ESTILO_SHP.campoNome;
+  document.getElementById('chk-nomes-talh').checked = !!ESTILO_SHP.nomesTalh;
+  const st=document.getElementById('sel-attr-talh');
+  if([...st.options].some(o=>o.value===ESTILO_SHP.campoNomeTalh)) st.value=ESTILO_SHP.campoNomeTalh;
+}
+function lerEstiloControles(){
+  ESTILO_SHP.cor  = document.getElementById('cor-perim').value || '#ff9100';
+  ESTILO_SHP.larg = parseFloat(document.getElementById('larg-perim').value)||2.5;
+  ESTILO_SHP.nomes= document.getElementById('chk-nomes-faz').checked;
+  ESTILO_SHP.campoNome = document.getElementById('sel-attr-nome').value || 'auto';
+  ESTILO_SHP.nomesTalh = document.getElementById('chk-nomes-talh').checked;
+  ESTILO_SHP.campoNomeTalh = document.getElementById('sel-attr-talh').value || 'auto';
+  ESTILO_SHP.verPerim   = document.getElementById('chk-perim').checked;
+  ESTILO_SHP.verTalhShp = document.getElementById('chk-talhshp').checked;
+  ESTILO_SHP.verTalhoes = document.getElementById('chk-talhoes').checked;
+  try{ idbSet('estilo_shp', {...ESTILO_SHP}); }catch(e){}
+}
+function nomeAuto(attrs){
+  if(!attrs) return '';
+  const chaves=Object.keys(attrs);
+  const pref=chaves.find(k=>/FAZ|NOME|NAME|PROP|IMOVEL/i.test(k) && String(attrs[k]).trim());
+  if(pref) return String(attrs[pref]).trim();
+  const outro=chaves.find(k=>String(attrs[k]).trim() && isNaN(Number(attrs[k])));
+  return outro?String(attrs[outro]).trim():'';
+}
+function popularSelect(selId, arr, atual){
+  const sel=document.getElementById(selId);
+  const chaves=new Set();
+  for(const p of arr) if(p.attrs) Object.keys(p.attrs).forEach(k=>chaves.add(k));
+  sel.innerHTML='<option value="auto">Automático</option>'+
+    [...chaves].sort().map(k=>'<option value="'+k+'">'+k+'</option>').join('');
+  sel.value=[...sel.options].some(o=>o.value===atual)?atual:'auto';
+}
+function popularSelectAtributos(){
+  popularSelect('sel-attr-nome', PERIMETROS, ESTILO_SHP.campoNome);
+  popularSelect('sel-attr-talh', TALHOES_SHP, ESTILO_SHP.campoNomeTalh);
+}
+function aplicarNomesEm(arr, campo){
+  for(const p of arr){
+    if(!p.attrs) continue; // importado antes: mantem o nome que veio
+    p.nome = campo==='auto' ? nomeAuto(p.attrs) : String(p.attrs[campo]||'').trim();
+  }
+}
+function aplicarNomes(){
+  aplicarNomesEm(PERIMETROS, ESTILO_SHP.campoNome);
+  aplicarNomesEm(TALHOES_SHP, ESTILO_SHP.campoNomeTalh);
+}
+function desenharPerimetros(){
+  document.getElementById('grupo-perim').style.display = PERIMETROS.length?'flex':'none';
+  document.getElementById('opcoes-perim').style.display = PERIMETROS.length?'block':'none';
+  document.getElementById('lbl-perim').textContent = 'Perímetro das fazendas'+(PERIMETROS.length?' · '+PERIMETROS.length.toLocaleString('pt-BR'):'');
+  if(!mapa) return;
+  if(camadaPerim){ mapa.removeLayer(camadaPerim); camadaPerim=null; }
+  if(!PERIMETROS.length || !document.getElementById('chk-perim').checked) return;
+  const pols=[];
+  for(const p of PERIMETROS){
+    const pg=L.polygon(p.aneis,{fill:false,color:ESTILO_SHP.cor,weight:ESTILO_SHP.larg});
+    if(p.nome){
+      if(ESTILO_SHP.nomes)
+        pg.bindTooltip(p.nome,{permanent:true,direction:'center',className:'rotulo-faz'});
+      else
+        pg.bindTooltip('Fazenda '+p.nome,{sticky:true});
+    }
+    pols.push(pg);
+  }
+  camadaPerim=L.layerGroup(pols).addTo(mapa);
+}
+function desenharTalhoesShp(){
+  document.getElementById('grupo-talhshp').style.display = TALHOES_SHP.length?'flex':'none';
+  document.getElementById('opcoes-talh').style.display = TALHOES_SHP.length?'block':'none';
+  document.getElementById('lbl-talhshp').textContent = 'Talhões (SHP)'+(TALHOES_SHP.length?' · '+TALHOES_SHP.length.toLocaleString('pt-BR'):'');
+  if(!mapa) return;
+  if(camadaTalhShp){ mapa.removeLayer(camadaTalhShp); camadaTalhShp=null; }
+  if(!TALHOES_SHP.length || !document.getElementById('chk-talhshp').checked) return;
+  const pols=[];
+  for(const t of TALHOES_SHP){
+    const pg=L.polygon(t.aneis,{fill:false,color:'#ffd21f',weight:2,dashArray:'6 4'});
+    if(t.nome){
+      if(ESTILO_SHP.nomesTalh)
+        pg.bindTooltip(t.nome,{permanent:true,direction:'center',className:'rotulo-faz'});
+      else
+        pg.bindTooltip('Talhão '+t.nome,{sticky:true});
+    }
+    pols.push(pg);
+  }
+  camadaTalhShp=L.layerGroup(pols).addTo(mapa);
+}
+function desenharCamadasShp(enquadrar){
+  desenharPerimetros();
+  desenharTalhoesShp();
+  if(enquadrar && mapa && !camada){ const b=limitesPerimetros(); if(b) mapa.fitBounds(b.pad(0.05)); }
+}
+
+function statusCamada(msg){
+  const el=document.getElementById('status-camada'); if(el) el.textContent=msg||'';
+}
+/* Persiste liga/desliga e, ao ligar camada pesada, dá feedback antes de desenhar
+   (o desenho de milhares de polígonos pode travar a tela por um instante). */
+function alternarCamada(desenhaFn, qtd){
+  lerEstiloControles();                 // salva verPerim / verTalhShp / verTalhoes
+  if(qtd>500){                          // camada grande: mostra aviso e desenha no próximo tick
+    statusCamada('desenhando '+qtd.toLocaleString('pt-BR')+'…');
+    setTimeout(()=>{ desenhaFn(); statusCamada(''); }, 20);
+  } else {
+    desenhaFn(); statusCamada('');
+  }
+}
+document.getElementById('arq-perim').addEventListener('change', e=>adicionarPerimetros(e.target.files,'perim'));
+document.getElementById('arq-talhshp').addEventListener('change', e=>adicionarPerimetros(e.target.files,'talh'));
+document.getElementById('btn-perim-limpar').addEventListener('click', async ()=>{
+  PERIMETROS.length=0; TALHOES_SHP.length=0;
+  try{ await idbDel('perimetros'); }catch(e){}
+  try{ await idbDel('talhoes_shp'); }catch(e){}
+  statusShp('perim','Perímetros e talhões removidos.'); statusShp('talh','');
+  desenharCamadasShp();
+});
+document.getElementById('chk-perim').addEventListener('change', ()=>alternarCamada(desenharPerimetros, PERIMETROS.length));
+document.getElementById('chk-talhshp').addEventListener('change', ()=>alternarCamada(desenharTalhoesShp, TALHOES_SHP.length));
+for(const id of ['cor-perim','larg-perim','chk-nomes-faz','sel-attr-nome'])
+  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); desenharPerimetros(); });
+for(const id of ['chk-nomes-talh','sel-attr-talh'])
+  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); desenharTalhoesShp(); });
+(async ()=>{
+  try{
+    const est=await idbGet('estilo_shp');
+    if(est){ Object.assign(ESTILO_SHP, est); }
+  }catch(e){}
+  try{
+    const v=await idbGet('perimetros');
+    if(v && v.length){ PERIMETROS.push(...v); }
+  }catch(e){}
+  try{
+    const t=await idbGet('talhoes_shp');
+    if(t && t.length){ TALHOES_SHP.push(...t); }
+  }catch(e){}
+  popularSelectAtributos();
+  aplicarEstiloControles();
+  aplicarNomes();
+  statusShp('perim'); statusShp('talh');
+  desenharCamadasShp();
+})();
+
 /* ================= Navegação ================= */
 document.querySelectorAll('.aba').forEach(b=>{
   b.addEventListener('click', ()=>{
@@ -1242,7 +1637,7 @@ document.querySelectorAll('.aba').forEach(b=>{
 });
 for(const id of ['sel-frota','sel-dia','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
-document.getElementById('chk-talhoes').addEventListener('change', desenharTalhoes);
+document.getElementById('chk-talhoes').addEventListener('change', ()=>alternarCamada(desenharTalhoes, TALHOES.length));
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
 document.getElementById('recolher').addEventListener('click', ()=>{
   document.getElementById('painel-mapa').classList.toggle('escondido');
