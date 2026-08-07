@@ -62,19 +62,21 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 .chk input{width:18px;height:18px;accent-color:var(--verde)}
 #painel-mapa .chk{font-size:12px;padding:4px 0}
 #painel-mapa .chk input{width:16px;height:16px}
-#dia-wrap{position:relative}
-#dia-btn{width:100%;padding:7px 22px 7px 8px;border:1px solid var(--borda);border-radius:8px;font-size:12px;
-  background:var(--painel);color:var(--tinta);text-align:left;cursor:pointer;position:relative}
-#dia-btn::after{content:'▾';position:absolute;right:9px;top:50%;transform:translateY(-50%);color:#5a6b62;font-size:11px}
-#dia-pop{display:none;margin-top:4px;border:1px solid var(--borda);border-radius:8px;max-height:190px;
-  overflow:auto;padding:4px;background:var(--painel)}
-#dia-pop.aberto{display:block}
-#dia-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:0;font-size:12px;
-  color:var(--tinta);cursor:pointer;border-radius:6px}
-#dia-pop label:hover{background:rgba(46,125,70,.10)}
-#dia-pop label.todos{font-weight:700}
-#dia-pop input{width:15px;height:15px;margin:0;accent-color:var(--verde)}
-#dia-pop .sep{border-top:1px solid var(--borda);margin:3px 2px}
+#dia-wrap,#exp-dia-wrap{position:relative}
+#dia-btn,#exp-dia-btn{width:100%;padding:10px 22px 10px 10px;border:1px solid var(--borda);border-radius:8px;
+  font-size:14px;background:var(--painel);color:var(--tinta);text-align:left;cursor:pointer;position:relative}
+#painel-mapa #dia-btn{padding:7px 22px 7px 8px;font-size:12px}
+#dia-btn::after,#exp-dia-btn::after{content:'▾';position:absolute;right:9px;top:50%;
+  transform:translateY(-50%);color:#5a6b62;font-size:11px}
+#dia-pop,#exp-dia-pop{display:none;margin-top:4px;border:1px solid var(--borda);border-radius:8px;
+  max-height:210px;overflow:auto;padding:4px;background:var(--painel)}
+#dia-pop.aberto,#exp-dia-pop.aberto{display:block}
+#dia-pop label,#exp-dia-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:0;
+  font-size:12px;color:var(--tinta);cursor:pointer;border-radius:6px;text-transform:none;font-weight:600;letter-spacing:0}
+#dia-pop label:hover,#exp-dia-pop label:hover{background:rgba(46,125,70,.10)}
+#dia-pop label.todos,#exp-dia-pop label.todos{font-weight:700}
+#dia-pop input,#exp-dia-pop input{width:15px;height:15px;margin:0;accent-color:var(--verde)}
+#dia-pop .sep,#exp-dia-pop .sep{border-top:1px solid var(--borda);margin:3px 2px}
 .leaflet-popup-content{font-family:var(--mono);font-size:11px;margin:10px}
 .rotulo-faz{background:transparent;border:none;box-shadow:none;font-weight:800;font-size:13px;
   color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,1px 1px 2px #000}
@@ -217,7 +219,10 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <label>Filtrar frota</label>
       <select id="exp-frota"></select>
       <label>Filtrar dia</label>
-      <select id="exp-dia"></select>
+      <div id="exp-dia-wrap">
+        <button type="button" id="exp-dia-btn">Todos os dias</button>
+        <div id="exp-dia-pop"></div>
+      </div>
       <div class="chk"><input type="checkbox" id="exp-agrupa" checked><span>Agrupar segmentos (~2 m) — arquivo menor</span></div>
       <button class="botao" id="btn-exportar">Gerar e compartilhar</button>
       <div id="exp-status" style="font-size:12px;font-family:var(--mono);color:var(--tinta2);margin-top:8px"></div>
@@ -864,35 +869,41 @@ function montarSeletores(){
   const lista = [...dias].filter(d=>d.length===10).sort();
   const opsDia = '<option value="'+TODAS+'">Todos os dias</option>'+
     lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
-  document.getElementById('exp-dia').innerHTML = opsDia;
-  montarDias(lista);
+  pickerMapa.montar(lista);
+  pickerExp.montar(lista);
 }
-let DIAS_SEL = new Set();   // vazio = todos os dias
+let DIAS_SEL = new Set();   // Mapa (vazio = todos)
+let DIAS_EXP = new Set();   // Exportar (vazio = todos)
 function fmtDia(d){ return d.split('-').reverse().join('/'); }
-function atualizaDiaBtn(){
-  const btn = document.getElementById('dia-btn');
-  const n = DIAS_SEL.size;
-  btn.textContent = n===0 ? 'Todos os dias' : (n===1 ? fmtDia([...DIAS_SEL][0]) : n+' dias');
-}
-function montarDias(lista){
-  const pop = document.getElementById('dia-pop');
-  // manter selecao de dias que ainda existem
-  DIAS_SEL = new Set([...DIAS_SEL].filter(d=>lista.includes(d)));
-  let h = '<label class="todos"><input type="checkbox" id="dia-todos"'+(DIAS_SEL.size===0?' checked':'')+'> Todos os dias</label><div class="sep"></div>';
-  h += lista.map(d=>'<label><input type="checkbox" class="dia-c" value="'+d+'"'+(DIAS_SEL.has(d)?' checked':'')+'> '+fmtDia(d)+'</label>').join('');
-  pop.innerHTML = h;
-  atualizaDiaBtn();
-  document.getElementById('dia-todos').addEventListener('change', function(){
-    if(this.checked){ DIAS_SEL.clear(); pop.querySelectorAll('.dia-c').forEach(c=>c.checked=false); }
-    else { this.checked = true; return; }   // nao desmarca "todos" direto
-    atualizaDiaBtn(); desenharMapa();
+function criarPickerDias(btnId, popId, wrapId, estado, onChange){
+  const btn = document.getElementById(btnId), pop = document.getElementById(popId);
+  function resumo(){ const n=estado.size; btn.textContent = n===0?'Todos os dias':(n===1?fmtDia([...estado][0]):n+' dias'); }
+  function montar(lista){
+    const novo = new Set([...estado].filter(d=>lista.includes(d)));
+    estado.clear(); novo.forEach(d=>estado.add(d));
+    let h = '<label class="todos"><input type="checkbox" class="pk-todos"'+(estado.size===0?' checked':'')+'> Todos os dias</label><div class="sep"></div>';
+    h += lista.map(d=>'<label><input type="checkbox" class="pk-dia" value="'+d+'"'+(estado.has(d)?' checked':'')+'> '+fmtDia(d)+'</label>').join('');
+    pop.innerHTML = h; resumo();
+    pop.querySelector('.pk-todos').addEventListener('change', function(){
+      if(this.checked){ estado.clear(); pop.querySelectorAll('.pk-dia').forEach(c=>c.checked=false); }
+      else { this.checked = true; return; }
+      resumo(); onChange && onChange();
+    });
+    pop.querySelectorAll('.pk-dia').forEach(c=>c.addEventListener('change', function(){
+      if(this.checked) estado.add(this.value); else estado.delete(this.value);
+      pop.querySelector('.pk-todos').checked = (estado.size===0);
+      resumo(); onChange && onChange();
+    }));
+  }
+  btn.addEventListener('click', function(e){ e.stopPropagation(); pop.classList.toggle('aberto'); });
+  document.addEventListener('click', function(e){
+    const w = document.getElementById(wrapId);
+    if(w && !w.contains(e.target)) pop.classList.remove('aberto');
   });
-  pop.querySelectorAll('.dia-c').forEach(c=>c.addEventListener('change', function(){
-    if(this.checked) DIAS_SEL.add(this.value); else DIAS_SEL.delete(this.value);
-    document.getElementById('dia-todos').checked = (DIAS_SEL.size===0);
-    atualizaDiaBtn(); desenharMapa();
-  }));
+  return { montar };
 }
+const pickerMapa = criarPickerDias('dia-btn','dia-pop','dia-wrap', DIAS_SEL, desenharMapa);
+const pickerExp  = criarPickerDias('exp-dia-btn','exp-dia-pop','exp-dia-wrap', DIAS_EXP, null);
 
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
@@ -1112,7 +1123,6 @@ async function exportar(){
   try{
     const sep = document.getElementById('exp-sep').value;
     const fSel = document.getElementById('exp-frota').value;
-    const dSel = document.getElementById('exp-dia').value;
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
     // gera quads das unidades filtradas por frota, depois filtra por dia
@@ -1121,8 +1131,8 @@ async function exportar(){
       if(fSel!==TODAS && u.frota!==fSel) continue;
       quads = quads.concat(gerarQuadsUnidade(u, passoM, inv));
     }
-    if(dSel!==TODAS)
-      quads = quads.filter(q=> q.u.dataHora(q.idx).substring(0,10)===dSel);
+    if(DIAS_EXP.size)
+      quads = quads.filter(q=> DIAS_EXP.has(q.u.dataHora(q.idx).substring(0,10)));
     if(!quads.length) throw new Error('Nenhum polígono no filtro escolhido.');
     // agrupa conforme a separação
     const chave = q => {
@@ -1679,14 +1689,6 @@ document.querySelectorAll('.aba').forEach(b=>{
 });
 for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
-document.getElementById('dia-btn').addEventListener('click', function(e){
-  e.stopPropagation();
-  document.getElementById('dia-pop').classList.toggle('aberto');
-});
-document.addEventListener('click', function(e){
-  const w = document.getElementById('dia-wrap');
-  if(w && !w.contains(e.target)) document.getElementById('dia-pop').classList.remove('aberto');
-});
 document.getElementById('chk-talhoes').addEventListener('change', ()=>alternarCamada(desenharTalhoes, TALHOES.length));
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
 document.getElementById('recolher').addEventListener('click', ()=>{
