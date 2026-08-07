@@ -62,6 +62,19 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 .chk input{width:18px;height:18px;accent-color:var(--verde)}
 #painel-mapa .chk{font-size:12px;padding:4px 0}
 #painel-mapa .chk input{width:16px;height:16px}
+#dia-wrap{position:relative}
+#dia-btn{width:100%;padding:7px 22px 7px 8px;border:1px solid var(--borda);border-radius:8px;font-size:12px;
+  background:var(--painel);color:var(--tinta);text-align:left;cursor:pointer;position:relative}
+#dia-btn::after{content:'▾';position:absolute;right:9px;top:50%;transform:translateY(-50%);color:#5a6b62;font-size:11px}
+#dia-pop{display:none;margin-top:4px;border:1px solid var(--borda);border-radius:8px;max-height:190px;
+  overflow:auto;padding:4px;background:var(--painel)}
+#dia-pop.aberto{display:block}
+#dia-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:0;font-size:12px;
+  color:var(--tinta);cursor:pointer;border-radius:6px}
+#dia-pop label:hover{background:rgba(46,125,70,.10)}
+#dia-pop label.todos{font-weight:700}
+#dia-pop input{width:15px;height:15px;margin:0;accent-color:var(--verde)}
+#dia-pop .sep{border-top:1px solid var(--borda);margin:3px 2px}
 .leaflet-popup-content{font-family:var(--mono);font-size:11px;margin:10px}
 .rotulo-faz{background:transparent;border:none;box-shadow:none;font-weight:800;font-size:13px;
   color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,1px 1px 2px #000}
@@ -127,7 +140,10 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <label>Exibir</label>
       <select id="sel-frota"></select>
       <label>Dia</label>
-      <select id="sel-dia"></select>
+      <div id="dia-wrap">
+        <button type="button" id="dia-btn">Todos os dias</button>
+        <div id="dia-pop"></div>
+      </div>
       <label>Colorir por</label>
       <select id="sel-cor">
         <option value="frota" selected>Frota (cor por trator)</option>
@@ -849,8 +865,35 @@ function montarSeletores(){
   const opsDia = '<option value="'+TODAS+'">Todos os dias</option>'+
     lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
   document.getElementById('exp-dia').innerHTML = opsDia;
-  document.getElementById('sel-dia').innerHTML = opsDia;
+  montarDias(lista);
 }
+let DIAS_SEL = new Set();   // vazio = todos os dias
+function fmtDia(d){ return d.split('-').reverse().join('/'); }
+function atualizaDiaBtn(){
+  const btn = document.getElementById('dia-btn');
+  const n = DIAS_SEL.size;
+  btn.textContent = n===0 ? 'Todos os dias' : (n===1 ? fmtDia([...DIAS_SEL][0]) : n+' dias');
+}
+function montarDias(lista){
+  const pop = document.getElementById('dia-pop');
+  // manter selecao de dias que ainda existem
+  DIAS_SEL = new Set([...DIAS_SEL].filter(d=>lista.includes(d)));
+  let h = '<label class="todos"><input type="checkbox" id="dia-todos"'+(DIAS_SEL.size===0?' checked':'')+'> Todos os dias</label><div class="sep"></div>';
+  h += lista.map(d=>'<label><input type="checkbox" class="dia-c" value="'+d+'"'+(DIAS_SEL.has(d)?' checked':'')+'> '+fmtDia(d)+'</label>').join('');
+  pop.innerHTML = h;
+  atualizaDiaBtn();
+  document.getElementById('dia-todos').addEventListener('change', function(){
+    if(this.checked){ DIAS_SEL.clear(); pop.querySelectorAll('.dia-c').forEach(c=>c.checked=false); }
+    else { this.checked = true; return; }   // nao desmarca "todos" direto
+    atualizaDiaBtn(); desenharMapa();
+  });
+  pop.querySelectorAll('.dia-c').forEach(c=>c.addEventListener('change', function(){
+    if(this.checked) DIAS_SEL.add(this.value); else DIAS_SEL.delete(this.value);
+    document.getElementById('dia-todos').checked = (DIAS_SEL.size===0);
+    atualizaDiaBtn(); desenharMapa();
+  }));
+}
+
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
   return f===TODAS ? UNIDADES : UNIDADES.filter(u=>u.frota===f);
@@ -961,12 +1004,11 @@ function desenharMapa(){
   const pols=[]; let limites=null; let areaTotal=0;
   const areaFrota = {};
   const areaFaz = {};
-  const diaSel = document.getElementById('sel-dia').value;
   const opac = opacidadeFaixa();
   for(const u of unids){
     const corArr = metrica ? u[metrica] : null;
-    const keep = (diaSel && diaSel!==TODAS)
-      ? (i => u.dataHora(i).substring(0,10)===diaSel) : null;
+    const keep = DIAS_SEL.size
+      ? (i => DIAS_SEL.has(u.dataHora(i).substring(0,10))) : null;
     const {cadeias, areaM2, proj} = construirCadeias(u, corArr, 2, inv, keep);
     areaTotal += areaM2;
     areaFrota[u.frota] = (areaFrota[u.frota]||0) + areaM2;
@@ -1635,8 +1677,16 @@ document.querySelectorAll('.aba').forEach(b=>{
     }
   });
 });
-for(const id of ['sel-frota','sel-dia','sel-cor','sel-pal','sel-opac','chk-inv'])
+for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
+document.getElementById('dia-btn').addEventListener('click', function(e){
+  e.stopPropagation();
+  document.getElementById('dia-pop').classList.toggle('aberto');
+});
+document.addEventListener('click', function(e){
+  const w = document.getElementById('dia-wrap');
+  if(w && !w.contains(e.target)) document.getElementById('dia-pop').classList.remove('aberto');
+});
 document.getElementById('chk-talhoes').addEventListener('change', ()=>alternarCamada(desenharTalhoes, TALHOES.length));
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
 document.getElementById('recolher').addEventListener('click', ()=>{
