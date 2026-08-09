@@ -902,7 +902,14 @@ function criarPickerDias(btnId, popId, wrapId, estado, onChange){
   });
   return { montar };
 }
-const pickerMapa = criarPickerDias('dia-btn','dia-pop','dia-wrap', DIAS_SEL, desenharMapa);
+let _tmFiltro=null;
+function desenharMapaFiltro(){
+  const leg=document.getElementById('legenda');
+  if(leg) leg.innerHTML='<i>Desenhando…</i>';
+  clearTimeout(_tmFiltro);
+  _tmFiltro=setTimeout(()=>desenharMapa(true),400);
+}
+const pickerMapa = criarPickerDias('dia-btn','dia-pop','dia-wrap', DIAS_SEL, desenharMapaFiltro);
 const pickerExp  = criarPickerDias('exp-dia-btn','exp-dia-pop','exp-dia-wrap', DIAS_EXP, null);
 
 function unidadesVisiveis(){
@@ -985,7 +992,7 @@ function desenharTalhoes(){
   }
   camadaTalhoes = L.layerGroup(pols).addTo(mapa);
 }
-function desenharMapa(){
+function desenharMapa(manterVista){
   garantirMapa();
   const leg = document.getElementById('legenda');
   if(camada){ mapa.removeLayer(camada); camada=null; }
@@ -1074,7 +1081,7 @@ function desenharMapa(){
     }
   }
   camada = L.layerGroup(pols).addTo(mapa);
-  if(limites) mapa.fitBounds(limites.pad(0.05));
+  if(limites && manterVista!==true) mapa.fitBounds(limites.pad(0.05));
   // legenda
   let html = '<b>'+(areaTotal/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b> (com sobreposição) · '+pols.length+' trechos';
   const fazendas = Object.keys(areaFaz).filter(f=>areaFaz[f]>0).sort();
