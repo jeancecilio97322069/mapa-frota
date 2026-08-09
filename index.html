@@ -1147,7 +1147,10 @@ async function exportar(){
       if(!grupos.has(k)) grupos.set(k, []);
       grupos.get(k).push(q);
     }
-    const sufDia = dSel!==TODAS ? '_'+dSel.replaceAll('-','') : '';
+    const diasExp = [...DIAS_EXP].sort();
+    const sufDia = !diasExp.length ? ''
+      : diasExp.length===1 ? '_'+diasExp[0].replaceAll('-','')
+      : '_'+diasExp.length+'DIAS';
     const zip = new JSZip();
     let nOk = 0;
     for(const [rot, lista] of grupos){
