@@ -83,13 +83,45 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 .rotulo-faz::before{display:none}
 .leaflet-popup-content table td{padding:2px 6px;font-size:10px;border:none}
 #recolher{position:absolute;top:10px;right:10px;z-index:1001;background:var(--painel);border:1px solid var(--borda);
-  border-radius:8px;width:36px;height:36px;font-size:17px;cursor:pointer;display:none}
+  border-radius:8px;width:36px;height:36px;font-size:17px;cursor:pointer;display:block;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+#painel-mapa.escondido{display:none}
+#painel-mapa{top:56px}   /* abre o espaço p/ o botão de recolher no canto */
+#busca-area.oculto{display:none!important}
+/* ---- Botão de camadas (canto inferior direito) ---- */
+#camadas-wrap{position:absolute;left:10px;bottom:26px;z-index:1001}
+#camadas-btn{width:40px;height:40px;border-radius:8px;border:1px solid var(--borda);background:var(--painel);
+  color:var(--tinta);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center}
+#camadas-btn:hover{background:#eef6ef}
+#camadas-menu{display:none;position:absolute;left:0;bottom:48px;background:var(--painel);border:1px solid var(--borda);
+  border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,.22);padding:6px;min-width:190px}
+#camadas-menu.aberto{display:block}
+.cam-tit{font-size:10px;font-weight:700;color:var(--tinta2);text-transform:uppercase;letter-spacing:.5px;padding:6px 8px 4px}
+.cam-op{display:flex;align-items:center;gap:9px;padding:8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--tinta)}
+.cam-op:hover{background:rgba(46,125,70,.10)}
+.cam-op input{width:16px;height:16px;accent-color:var(--verde);margin:0}
 @media(max-width:560px){
-  #recolher{display:block}
-  #painel-mapa{top:52px}
-  #painel-mapa.escondido{display:none}
+  #painel-mapa{top:56px}
 }
 .chip{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+/* ---- Busca de área (topo do mapa, estilo TAP) ---- */
+#busca-area{position:absolute;top:10px;left:10px;z-index:1002;width:300px;max-width:calc(100% - 64px)}
+#busca-cx{display:flex;align-items:center;background:var(--painel);border:1px solid var(--borda);
+  border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.18);overflow:hidden}
+#busca-inp{flex:1;border:none;outline:none;padding:11px 12px;font-size:14px;background:transparent;color:var(--tinta)}
+#busca-x{border:none;background:none;color:var(--tinta2);font-size:15px;padding:0 12px;cursor:pointer;display:none}
+#busca-res{margin-top:6px;background:var(--painel);border:1px solid var(--borda);border-radius:10px;
+  box-shadow:0 2px 10px rgba(0,0,0,.18);max-height:calc(100vh - 130px);overflow-y:auto;display:none}
+#busca-res.aberto{display:block}
+.res-item{display:flex;align-items:center;gap:10px;padding:8px 10px;cursor:pointer;border-bottom:1px solid #edf0ec}
+.res-item:last-child{border-bottom:none}
+.res-item:hover,.res-item.sel{background:rgba(46,125,70,.10)}
+.res-mini{width:34px;height:34px;flex-shrink:0;border:1px solid var(--borda);border-radius:6px;background:#f7f9f6}
+.res-txt{min-width:0}
+.res-nome{font-size:13px;font-weight:600;color:var(--tinta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.res-sub{font-size:11px;color:var(--tinta2);font-family:var(--mono)}
+.res-vazio{padding:12px;font-size:12px;color:var(--tinta2);text-align:center}
+#busca-area.ativo #busca-cx{border-color:var(--verde)}
+@media(max-width:560px){ #busca-area{width:calc(100% - 60px)} }
 </style>
 </head>
 <body>
@@ -137,10 +169,41 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
   <!-- MAPA -->
   <div class="tela" id="tela-mapa">
     <div id="mapa"></div>
+    <div id="busca-area" style="display:none">
+      <div id="busca-cx">
+        <input type="text" id="busca-inp" placeholder="Pesquisar fazenda / talhão…" autocomplete="off">
+        <button type="button" id="busca-x" title="Limpar">✕</button>
+      </div>
+      <div id="busca-res"></div>
+    </div>
     <button id="recolher" title="Opções">⚙︎</button>
+    <div id="camadas-wrap">
+      <button id="camadas-btn" title="Camadas do mapa">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </button>
+      <div id="camadas-menu">
+        <div class="cam-tit">Fundo do mapa</div>
+        <label class="cam-op"><input type="radio" name="fundo" value="sat" checked><span>Satélite (Google)</span></label>
+        <label class="cam-op"><input type="radio" name="fundo" value="satnome"><span>Satélite + rótulos</span></label>
+        <label class="cam-op"><input type="radio" name="fundo" value="osm"><span>Mapa (OSM)</span></label>
+        <label class="cam-op"><input type="radio" name="fundo" value="topo"><span>Topográfico</span></label>
+      </div>
+    </div>
+    <select id="sel-fundo" style="display:none">
+      <option value="sat">Satélite (Google)</option>
+      <option value="satnome">Satélite + rótulos</option>
+      <option value="osm">Mapa (OSM)</option>
+      <option value="topo">Topográfico</option>
+    </select>
     <div id="painel-mapa">
       <label>Exibir</label>
       <select id="sel-frota"></select>
+      <label>Cliente</label>
+      <select id="sel-cliente"><option value="*">Todos os clientes</option></select>
+      <label>Fazenda</label>
+      <select id="sel-faz"><option value="*">Todas as fazendas</option></select>
+      <label id="lbl-sel-area" style="display:none">Área (talhão do SHP)</label>
+      <select id="sel-area" style="display:none"><option value="*">Todas as áreas</option></select>
       <label>Dia</label>
       <div id="dia-wrap">
         <button type="button" id="dia-btn">Todos os dias</button>
@@ -169,13 +232,6 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="0.8">Forte</option>
         <option value="1">Máxima (sólida)</option>
         <option value="0.45">Suave</option>
-      </select>
-      <label>Fundo do mapa</label>
-      <select id="sel-fundo">
-        <option value="sat">Satélite</option>
-        <option value="satnome">Satélite + rótulos</option>
-        <option value="osm">Mapa (OSM)</option>
-        <option value="topo">Topográfico</option>
       </select>
       <div class="chk"><input type="checkbox" id="chk-inv"><span>Inverter seções (C3000)</span></div>
       <div class="chk" id="grupo-talhoes" style="display:none"><input type="checkbox" id="chk-talhoes" checked><span id="lbl-talhoes">Contorno dos talhões</span></div>
@@ -212,12 +268,19 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <label>Separar arquivos por</label>
       <select id="exp-sep">
         <option value="frota">Frota — 1 shape por frota</option>
+        <option value="cliente">Cliente — 1 shape por cliente</option>
         <option value="fazenda">Fazenda — 1 shape por fazenda</option>
         <option value="talhao">Talhão — 1 shape por talhão</option>
         <option value="nada">Não separar — tudo num shape só</option>
       </select>
       <label>Filtrar frota</label>
       <select id="exp-frota"></select>
+      <label>Filtrar cliente</label>
+      <select id="exp-cliente"><option value="*">Todos os clientes</option></select>
+      <label>Filtrar fazenda</label>
+      <select id="exp-faz"><option value="*">Todas as fazendas</option></select>
+      <label id="exp-lbl-area" style="display:none">Filtrar área (talhão do SHP)</label>
+      <select id="exp-area" style="display:none"><option value="*">Todas as áreas</option></select>
       <label>Filtrar dia</label>
       <div id="exp-dia-wrap">
         <button type="button" id="exp-dia-btn">Todos os dias</button>
@@ -248,6 +311,83 @@ const UNIDADES = [];
 const TALHOES = [];
 let mapa=null, camada=null, camadaTalhoes=null;
 const TODAS='*';
+
+/* OS = ordem de serviço: vem editada no campo Tarefa (TSK@B) ou, quando vazio,
+   no campo do Talhão/Campo (PFD@C). Cobre os dois padrões de edição. */
+function osDe(u){ return (u && (u.tarefa || u.talhao) || '').trim(); }
+/* Estados dos filtros novos (vazio = todos). Compartilhados por Mapa e Exportar. */
+const FILTRO = { cliente:TODAS, faz:TODAS, area:TODAS };      // Mapa
+const FILTRO_EXP = { cliente:TODAS, faz:TODAS, area:TODAS };  // Exportar
+
+/* ----- Filtro por Área (talhão do SHP): ponto dentro do polígono ----- */
+/* anéis em [lat,lon]; ray casting no plano lon(x)/lat(y). Rótulo de uma feição SHP
+   vem do attrs (campo escolhido) ou do nome. campo = atributo daquela camada. */
+function rotuloAreaSHP(t, campo){
+  campo = campo || 'auto';
+  if(campo && campo!=='auto' && t.attrs && t.attrs[campo]!=null && String(t.attrs[campo]).trim())
+    return String(t.attrs[campo]).trim();
+  if(t.nome && t.nome.trim()) return t.nome.trim();
+  if(t.attrs){ for(const k in t.attrs){ const v=String(t.attrs[k]||'').trim(); if(v) return v; } }
+  return '';
+}
+let _AREAS_IDX = null;  // [{rot, aneis, bb:[minLat,minLon,maxLat,maxLon], origem:'talhao'|'perim'}]
+function reindexarAreas(){
+  _AREAS_IDX = [];
+  const campoTalh = (typeof ESTILO_SHP!=='undefined' && ESTILO_SHP.campoNomeTalh) || 'auto';
+  const campoPerim = (typeof ESTILO_SHP!=='undefined' && ESTILO_SHP.campoNome) || 'auto';
+  const fontes = [];
+  if(typeof TALHOES_SHP!=='undefined' && TALHOES_SHP.length) fontes.push([TALHOES_SHP, campoTalh, 'talhao']);
+  if(typeof PERIMETROS!=='undefined' && PERIMETROS.length)   fontes.push([PERIMETROS, campoPerim, 'perim']);
+  for(const [src, campo, origem] of fontes){
+    for(const t of src){
+      const rot = rotuloAreaSHP(t, campo);
+      if(!rot) continue;
+      let mnLa=1e9,mnLo=1e9,mxLa=-1e9,mxLo=-1e9;
+      for(const anel of t.aneis) for(const ll of anel){
+        const la=ll[0], lo=ll[1];
+        if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(lo<mnLo)mnLo=lo; if(lo>mxLo)mxLo=lo;
+      }
+      _AREAS_IDX.push({rot, aneis:t.aneis, bb:[mnLa,mnLo,mxLa,mxLo], origem});
+    }
+  }
+}
+function areasDisponiveis(){
+  if(_AREAS_IDX===null) reindexarAreas();
+  return [...new Set((_AREAS_IDX||[]).map(a=>a.rot))].sort((a,b)=>a.localeCompare(b,'pt-BR',{numeric:true}));
+}
+function pontoEmAnel(la, lo, anel){
+  let dentro=false;
+  for(let i=0,j=anel.length-1;i<anel.length;j=i++){
+    const yi=anel[i][0], xi=anel[i][1], yj=anel[j][0], xj=anel[j][1];
+    if(((yi>la)!==(yj>la)) && (lo < (xj-xi)*(la-yi)/((yj-yi)||1e-12)+xi)) dentro=!dentro;
+  }
+  return dentro;
+}
+/* true se (la,lo) cai em ALGUMA das áreas cujo rótulo == alvo */
+function pontoNaArea(la, lo, alvo){
+  if(_AREAS_IDX===null) reindexarAreas();
+  if(!_AREAS_IDX) return false;
+  for(const a of _AREAS_IDX){
+    if(a.rot!==alvo) continue;
+    if(la<a.bb[0]||la>a.bb[2]||lo<a.bb[1]||lo>a.bb[3]) continue;
+    for(const anel of a.aneis) if(pontoEmAnel(la,lo,anel)) return true;
+  }
+  return false;
+}
+/* Unidade passa nos filtros de cliente/fazenda? (área é ponto-a-ponto, tratada no desenho/export) */
+function unidPassaFiltro(u, filt){
+  if(filt.cliente!==TODAS && (u.cliente||'')!==filt.cliente) return false;
+  if(filt.faz!==TODAS && (u.fazenda||'')!==filt.faz) return false;
+  return true;
+}
+/* uma unidade tem algum ponto dentro da área alvo? (pré-filtro rápido p/ export) */
+function unidTemArea(u, alvo){
+  if(alvo===TODAS) return true;
+  const passo = Math.max(1, Math.ceil(u.n/4000));
+  for(let i=0;i<u.n;i+=passo) if(u.larg[i]>0 && pontoNaArea(u.lat[i],u.lon[i],alvo)) return true;
+  // varredura fina só se a amostragem não achou nada mas há sobreposição de bbox
+  return false;
+}
 
 /* ================= Entrada ================= */
 const inArq = document.getElementById('arq');
@@ -859,6 +999,7 @@ function montarSeletores(){
     .concat(fs.map(f=>'<option value="'+f+'">Frota '+f+'</option>'));
   document.getElementById('sel-frota').innerHTML = ops.join('');
   document.getElementById('exp-frota').innerHTML = ops.join('');
+  montarFiltrosClienteOS();
   // dias presentes (amostragem: primeiro, último e passos de 500 registros)
   const dias = new Set();
   for(const u of UNIDADES){
@@ -871,6 +1012,131 @@ function montarSeletores(){
     lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
   pickerMapa.montar(lista);
   pickerExp.montar(lista);
+}
+function clientes(){ return [...new Set(UNIDADES.map(u=>(u.cliente||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR')); }
+function fazendas(){ return [...new Set(UNIDADES.map(u=>(u.fazenda||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR',{numeric:true})); }
+function _opcoes(lista, rotTodos){
+  return ['<option value="'+TODAS+'">'+rotTodos+' ('+lista.length+')</option>']
+    .concat(lista.map(v=>'<option value="'+v.replace(/"/g,'&quot;')+'">'+v+'</option>')).join('');
+}
+function _restaura(sel, valor){ // mantém a seleção anterior se ainda existir
+  if(valor && valor!==TODAS && [...sel.options].some(o=>o.value===valor)) sel.value=valor;
+  else sel.value=TODAS;
+}
+function montarFiltrosClienteOS(){
+  const cli=clientes(), faz=fazendas();
+  const selC=document.getElementById('sel-cliente'), expC=document.getElementById('exp-cliente');
+  const selF=document.getElementById('sel-faz'),     expF=document.getElementById('exp-faz');
+  selC.innerHTML=expC.innerHTML=_opcoes(cli,'Todos os clientes');
+  selF.innerHTML=expF.innerHTML=_opcoes(faz,'Todas as fazendas');
+  _restaura(selC,FILTRO.cliente); _restaura(expC,FILTRO_EXP.cliente);
+  _restaura(selF,FILTRO.faz);     _restaura(expF,FILTRO_EXP.faz);
+  FILTRO.cliente=selC.value; FILTRO_EXP.cliente=expC.value;
+  FILTRO.faz=selF.value;     FILTRO_EXP.faz=expF.value;
+  // esconde o seletor de cliente/fazenda se não houver nenhum valor (evita UI vazia)
+  for(const [wrapSel, len] of [['sel-cliente',cli.length],['exp-cliente',cli.length],['sel-faz',faz.length],['exp-faz',faz.length]]){
+    const el=document.getElementById(wrapSel);
+    el.parentElement && (el.style.display = len?'block':'none');
+  }
+  montarFiltroArea();
+}
+function invalidarAreas(){
+  _AREAS_IDX=null;
+  if(document.getElementById('sel-area')) montarFiltroArea();
+}
+function montarFiltroArea(){
+  reindexarAreas();
+  const areas=areasDisponiveis();
+  const selA=document.getElementById('sel-area'), expA=document.getElementById('exp-area');
+  const lblA=document.getElementById('lbl-sel-area'), expLbl=document.getElementById('exp-lbl-area');
+  const html=_opcoes(areas,'Todas as áreas');
+  selA.innerHTML=expA.innerHTML=html;
+  _restaura(selA,FILTRO.area); _restaura(expA,FILTRO_EXP.area);
+  FILTRO.area=selA.value; FILTRO_EXP.area=expA.value;
+  const tem=areas.length>0;
+  selA.style.display=expA.style.display=lblA.style.display=expLbl.style.display = tem?'block':'none';
+  const bAr=document.getElementById('busca-area');
+  if(bAr) bAr.style.display = tem?'block':'none';
+  montarBuscaResultados('');
+}
+/* ---- Busca de área (topo do mapa) ---- */
+/* miniatura SVG do talhão: normaliza os anéis na caixa 34x34 mantendo proporção */
+function miniaturaArea(a){
+  const [mnLa,mnLo,mxLa,mxLo]=a.bb;
+  const w=(mxLo-mnLo)||1e-6, h=(mxLa-mnLa)||1e-6;
+  const S=32, pad=2;
+  const esc=Math.min(S/w, S/h);
+  const ox=(S-w*esc)/2+pad, oy=(S-h*esc)/2+pad;
+  const paths=a.aneis.map(anel=>{
+    let d='';
+    for(let i=0;i<anel.length;i++){
+      const x=ox+(anel[i][1]-mnLo)*esc;
+      const y=oy+(mxLa-anel[i][0])*esc;  // inverte Y (norte pra cima)
+      d+=(i?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' ';
+    }
+    return '<path d="'+d+'Z" fill="rgba(46,125,70,.25)" stroke="#2e7d46" stroke-width="1.1"/>';
+  }).join('');
+  return '<svg class="res-mini" viewBox="0 0 '+(S+pad*2)+' '+(S+pad*2)+'">'+paths+'</svg>';
+}
+let _BUSCA_SEL=-1, _BUSCA_LISTA=[];
+function montarBuscaResultados(termo){
+  const cx=document.getElementById('busca-res');
+  if(!cx) return;
+  if(_AREAS_IDX===null) reindexarAreas();
+  const t=(termo||'').trim().toLowerCase();
+  // agrupa por rótulo (um talhão pode ter vários anéis/registros); usa o 1º de cada rótulo p/ bbox e miniatura
+  const porRot=new Map();
+  for(const a of (_AREAS_IDX||[])){
+    const chave = a.origem+'|'+a.rot;  // separa talhão e perímetro de mesmo nome
+    if(!porRot.has(chave)) porRot.set(chave, {rot:a.rot, origem:a.origem, aneis:[...a.aneis], bb:[...a.bb]});
+    else{
+      const g=porRot.get(chave);
+      g.aneis=g.aneis.concat(a.aneis);
+      g.bb=[Math.min(g.bb[0],a.bb[0]),Math.min(g.bb[1],a.bb[1]),Math.max(g.bb[2],a.bb[2]),Math.max(g.bb[3],a.bb[3])];
+    }
+  }
+  let lista=[...porRot.values()];
+  if(t) lista=lista.filter(g=>g.rot.toLowerCase().includes(t));
+  lista.sort((x,y)=>x.rot.localeCompare(y.rot,'pt-BR',{numeric:true}));
+  _BUSCA_LISTA=lista; _BUSCA_SEL=-1;
+  if(!lista.length){
+    cx.innerHTML = t ? '<div class="res-vazio">Nenhuma área encontrada.</div>'
+                     : '<div class="res-vazio">Digite para pesquisar fazendas e talhões.</div>';
+  } else {
+    const MAX=200;
+    cx.innerHTML = lista.slice(0,MAX).map((g,i)=>{
+      const tipo = g.origem==='perim' ? 'Fazenda' : 'Talhão';
+      return '<div class="res-item" data-i="'+i+'">'+miniaturaArea(g)+
+        '<div class="res-txt"><div class="res-nome">'+g.rot+'</div>'+
+        '<div class="res-sub">'+tipo+'</div></div></div>';
+    }).join('') + (lista.length>MAX?'<div class="res-vazio">+'+(lista.length-MAX)+' resultados… refine a busca</div>':'');
+    cx.querySelectorAll('.res-item').forEach(el=>{
+      el.addEventListener('click', ()=>selecionarAreaBusca(+el.dataset.i));
+    });
+  }
+  cx.classList.toggle('aberto', !!(document.getElementById('busca-inp')&&document.activeElement===document.getElementById('busca-inp')) || (t.length>0));
+}
+function selecionarAreaBusca(i){
+  const g=_BUSCA_LISTA[i]; if(!g) return;
+  // filtra a pintura por essa área + sincroniza o seletor do painel
+  FILTRO.area=g.rot;
+  const selA=document.getElementById('sel-area');
+  if(selA && [...selA.options].some(o=>o.value===g.rot)) selA.value=g.rot;
+  document.getElementById('busca-inp').value=g.rot;
+  document.getElementById('busca-res').classList.remove('aberto');
+  document.getElementById('busca-x').style.display='block';
+  desenharMapaFiltro();
+  // zoom na área
+  garantirMapa();
+  mapa.fitBounds([[g.bb[0],g.bb[1]],[g.bb[2],g.bb[3]]], {padding:[40,40], maxZoom:17});
+}
+function limparBuscaArea(){
+  FILTRO.area=TODAS;
+  const selA=document.getElementById('sel-area'); if(selA) selA.value=TODAS;
+  const inp=document.getElementById('busca-inp'); if(inp) inp.value='';
+  document.getElementById('busca-x').style.display='none';
+  montarBuscaResultados('');
+  desenharMapaFiltro();
 }
 let DIAS_SEL = new Set();   // Mapa (vazio = todos)
 let DIAS_EXP = new Set();   // Exportar (vazio = todos)
@@ -914,7 +1180,7 @@ const pickerExp  = criarPickerDias('exp-dia-btn','exp-dia-pop','exp-dia-wrap', D
 
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
-  return f===TODAS ? UNIDADES : UNIDADES.filter(u=>u.frota===f);
+  return UNIDADES.filter(u => (f===TODAS || u.frota===f) && unidPassaFiltro(u, FILTRO));
 }
 
 /* ================= Mapa ================= */
@@ -922,12 +1188,21 @@ let FUNDOS=null, fundoAtual=null, rotulosSat=null;
 function garantirMapa(){
   if(mapa) return;
   mapa = L.map('mapa',{preferCanvas:true, zoomControl:true});
+  // Satélite: Google (mais atualizado, zoom 21) com fallback automático pro Esri quando um tile falha
+  const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:21,maxNativeZoom:19,attribution:'Esri'});
+  const googleSat = L.tileLayer('https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',{subdomains:['0','1','2','3'],maxZoom:21,attribution:'Google'});
+  googleSat.on('tileerror', function(){
+    // se o Google bloquear/falhar, cai pro Esri sem quebrar a experiência
+    if(mapa.hasLayer(googleSat) && !mapa.hasLayer(esriSat)){
+      mapa.removeLayer(googleSat); esriSat.addTo(mapa); esriSat.bringToBack(); fundoAtual=esriSat;
+    }
+  });
   FUNDOS = {
-    sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Esri'}),
+    sat: googleSat,
     osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OSM'}),
     topo: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Esri'})
   };
-  rotulosSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
+  rotulosSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:21,maxNativeZoom:19});
   trocarFundo();
   mapa.setView([-22.4,-50.6], 6);
   desenharCamadasShp(true);
@@ -1023,10 +1298,13 @@ function desenharMapa(manterVista){
   const areaFrota = {};
   const areaFaz = {};
   const opac = opacidadeFaixa();
+  const areaSel = FILTRO.area;
   for(const u of unids){
     const corArr = metrica ? u[metrica] : null;
-    const keep = DIAS_SEL.size
-      ? (i => DIAS_SEL.has(u.dataHora(i).substring(0,10))) : null;
+    const filtDia = DIAS_SEL.size ? (i => DIAS_SEL.has(u.dataHora(i).substring(0,10))) : null;
+    const filtArea = (areaSel!==TODAS) ? (i => pontoNaArea(u.lat[i], u.lon[i], areaSel)) : null;
+    const keep = (filtDia && filtArea) ? (i => filtDia(i) && filtArea(i))
+               : (filtDia || filtArea || null);
     const {cadeias, areaM2, proj} = construirCadeias(u, corArr, 2, inv, keep);
     areaTotal += areaM2;
     areaFrota[u.frota] = (areaFrota[u.frota]||0) + areaM2;
@@ -1104,6 +1382,8 @@ function abrirPopup(e){
   const u = e.target._u, i = e.target._idx;
   const fx = (v,d,suf)=> isNaN(v)?'—':v.toFixed(d)+suf;
   let extra = '';
+  if(u.cliente) extra += '<tr><td>Cliente</td><td class="num"><b>'+u.cliente+'</b></td></tr>';
+  if(osDe(u)) extra += '<tr><td>OS</td><td class="num"><b>'+osDe(u)+'</b></td></tr>';
   if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+([u.fazenda,u.talhao].filter(Boolean).join(' · '))+'</b></td></tr>';
   if(u.tarefa) extra += '<tr><td>Tarefa</td><td class="num">'+u.tarefa+'</td></tr>';
   const html = '<b>Frota '+u.frota+' · '+u.nome+'</b> ('+u.fonte+')<br>'+u.dataHora(i)+'<br>'+
@@ -1132,18 +1412,23 @@ async function exportar(){
     const fSel = document.getElementById('exp-frota').value;
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
-    // gera quads das unidades filtradas por frota, depois filtra por dia
+    // gera quads das unidades filtradas por frota/cliente/OS, depois filtra por dia e área
     let quads = [];
     for(const u of UNIDADES){
       if(fSel!==TODAS && u.frota!==fSel) continue;
+      if(!unidPassaFiltro(u, FILTRO_EXP)) continue;
+      if(FILTRO_EXP.area!==TODAS && !unidTemArea(u, FILTRO_EXP.area)) continue;
       quads = quads.concat(gerarQuadsUnidade(u, passoM, inv));
     }
     if(DIAS_EXP.size)
       quads = quads.filter(q=> DIAS_EXP.has(q.u.dataHora(q.idx).substring(0,10)));
+    if(FILTRO_EXP.area!==TODAS)
+      quads = quads.filter(q=> pontoNaArea(q.u.lat[q.idx], q.u.lon[q.idx], FILTRO_EXP.area));
     if(!quads.length) throw new Error('Nenhum polígono no filtro escolhido.');
     // agrupa conforme a separação
     const chave = q => {
       if(sep==='frota') return 'FROTA_'+q.u.frota;
+      if(sep==='cliente') return 'CLI_'+nomeSeguro(q.u.cliente||'SEM_CLIENTE');
       if(sep==='fazenda') return 'FAZ_'+nomeSeguro(q.u.fazenda||'SEM_FAZENDA');
       if(sep==='talhao') return 'TAL_'+nomeSeguro((q.u.fazenda?q.u.fazenda+'_':'')+(q.u.talhao||'SEM_TALHAO'));
       return 'FAIXAS';
@@ -1172,7 +1457,7 @@ async function exportar(){
     }
     const blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
     const arqNome = (grupos.size>1
-      ? 'FAIXAS_'+nOk+'_'+({frota:'FROTAS',fazenda:'FAZENDAS',talhao:'TALHOES'}[sep]||'GRUPOS')
+      ? 'FAIXAS_'+nOk+'_'+({frota:'FROTAS',cliente:'CLIENTES',fazenda:'FAZENDAS',talhao:'TALHOES'}[sep]||'GRUPOS')
       : [...grupos.keys()][0]+sufDia) + '.zip';
     st.textContent = arqNome+' · '+nOk+' shapefile(s) · '+(blob.size/1024).toFixed(0)+' KB';
     await entregarArquivo(blob, arqNome);
@@ -1518,6 +1803,7 @@ async function adicionarPerimetros(lista, tipo){
     const infoCol = colunas.size ? ' Colunas: '+[...colunas].sort().join(', ')+'.'
                                  : ' ATENÇÃO: nenhum .dbf pareado — inclua o .dbf junto para ter os nomes.';
     statusShp(tipo, novos.length+' '+(perim?'perímetro(s)':'talhão(ões)')+' importados e salvos.'+infoCol);
+    invalidarAreas();
     desenharCamadasShp(true);
   }catch(err){
     statusShp(tipo, 'Erro: '+(err&&err.message?err.message:err));
@@ -1656,14 +1942,15 @@ document.getElementById('btn-perim-limpar').addEventListener('click', async ()=>
   try{ await idbDel('perimetros'); }catch(e){}
   try{ await idbDel('talhoes_shp'); }catch(e){}
   statusShp('perim','Perímetros e talhões removidos.'); statusShp('talh','');
+  invalidarAreas();
   desenharCamadasShp();
 });
 document.getElementById('chk-perim').addEventListener('change', ()=>alternarCamada(desenharPerimetros, PERIMETROS.length));
 document.getElementById('chk-talhshp').addEventListener('change', ()=>alternarCamada(desenharTalhoesShp, TALHOES_SHP.length));
 for(const id of ['cor-perim','larg-perim','chk-nomes-faz','sel-attr-nome'])
-  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); desenharPerimetros(); });
+  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); if(id==='sel-attr-nome') invalidarAreas(); desenharPerimetros(); });
 for(const id of ['chk-nomes-talh','sel-attr-talh'])
-  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); desenharTalhoesShp(); });
+  document.getElementById(id).addEventListener('change', ()=>{ lerEstiloControles(); aplicarNomes(); if(id==='sel-attr-talh') invalidarAreas(); desenharTalhoesShp(); });
 (async ()=>{
   try{
     const est=await idbGet('estilo_shp');
@@ -1681,6 +1968,7 @@ for(const id of ['chk-nomes-talh','sel-attr-talh'])
   aplicarEstiloControles();
   aplicarNomes();
   statusShp('perim'); statusShp('talh');
+  invalidarAreas();
   desenharCamadasShp();
 })();
 
@@ -1699,10 +1987,65 @@ document.querySelectorAll('.aba').forEach(b=>{
 });
 for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
   document.getElementById(id).addEventListener('change', desenharMapa);
+document.getElementById('sel-cliente').addEventListener('change', function(){ FILTRO.cliente=this.value; desenharMapaFiltro(); });
+document.getElementById('sel-faz').addEventListener('change',     function(){ FILTRO.faz=this.value;     desenharMapaFiltro(); });
+document.getElementById('sel-area').addEventListener('change',    function(){ FILTRO.area=this.value;    desenharMapaFiltro(); });
+document.getElementById('exp-cliente').addEventListener('change', function(){ FILTRO_EXP.cliente=this.value; });
+document.getElementById('exp-faz').addEventListener('change',     function(){ FILTRO_EXP.faz=this.value; });
+document.getElementById('exp-area').addEventListener('change',    function(){ FILTRO_EXP.area=this.value; });
+/* ---- eventos da busca de área ---- */
+(function(){
+  const inp=document.getElementById('busca-inp'), res=document.getElementById('busca-res'),
+        x=document.getElementById('busca-x'), area=document.getElementById('busca-area');
+  if(!inp) return;
+  let tm=null;
+  inp.addEventListener('input', function(){
+    x.style.display=this.value?'block':'none';
+    area.classList.toggle('ativo', !!this.value);
+    clearTimeout(tm); tm=setTimeout(()=>montarBuscaResultados(inp.value),120);
+  });
+  inp.addEventListener('focus', function(){ montarBuscaResultados(inp.value); res.classList.add('aberto'); });
+  x.addEventListener('click', function(){ limparBuscaArea(); inp.focus(); });
+  document.addEventListener('click', function(e){ if(area && !area.contains(e.target)) res.classList.remove('aberto'); });
+  inp.addEventListener('keydown', function(e){
+    const itens=[...res.querySelectorAll('.res-item')];
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+      e.preventDefault(); if(!itens.length) return;
+      _BUSCA_SEL += (e.key==='ArrowDown'?1:-1);
+      if(_BUSCA_SEL<0) _BUSCA_SEL=itens.length-1; if(_BUSCA_SEL>=itens.length) _BUSCA_SEL=0;
+      itens.forEach((it,k)=>it.classList.toggle('sel',k===_BUSCA_SEL));
+      itens[_BUSCA_SEL].scrollIntoView({block:'nearest'});
+    } else if(e.key==='Enter'){
+      if(_BUSCA_SEL>=0 && itens[_BUSCA_SEL]) selecionarAreaBusca(+itens[_BUSCA_SEL].dataset.i);
+      else if(itens.length===1) selecionarAreaBusca(+itens[0].dataset.i);
+    } else if(e.key==='Escape'){ res.classList.remove('aberto'); inp.blur(); }
+  });
+})();
 document.getElementById('chk-talhoes').addEventListener('change', ()=>alternarCamada(desenharTalhoes, TALHOES.length));
 document.getElementById('sel-fundo').addEventListener('change', trocarFundo);
+/* ---- botão de camadas: abre menu e espelha a escolha no #sel-fundo ---- */
+(function(){
+  const btn=document.getElementById('camadas-btn'), menu=document.getElementById('camadas-menu'),
+        wrap=document.getElementById('camadas-wrap'), selFundo=document.getElementById('sel-fundo');
+  if(!btn) return;
+  btn.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('aberto'); });
+  document.addEventListener('click', function(e){ if(wrap && !wrap.contains(e.target)) menu.classList.remove('aberto'); });
+  menu.querySelectorAll('input[name="fundo"]').forEach(r=>{
+    r.addEventListener('change', function(){
+      if(!this.checked) return;
+      selFundo.value=this.value;
+      trocarFundo();
+    });
+  });
+})();
 document.getElementById('recolher').addEventListener('click', ()=>{
-  document.getElementById('painel-mapa').classList.toggle('escondido');
+  const painel=document.getElementById('painel-mapa');
+  const busca=document.getElementById('busca-area');
+  const btn=document.getElementById('recolher');
+  const recolhido=painel.classList.toggle('escondido');
+  if(busca) busca.classList.toggle('oculto', recolhido);
+  btn.textContent = recolhido ? '☰' : '⚙︎';
+  btn.title = recolhido ? 'Mostrar opções' : 'Ocultar opções';
 });
 </script>
 </body>
