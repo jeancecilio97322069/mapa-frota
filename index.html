@@ -77,6 +77,20 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 #dia-pop label.todos,#exp-dia-pop label.todos{font-weight:700}
 #dia-pop input,#exp-dia-pop input{width:15px;height:15px;margin:0;accent-color:var(--verde)}
 #dia-pop .sep,#exp-dia-pop .sep{border-top:1px solid var(--borda);margin:3px 2px}
+/* seletor genérico de múltipla escolha (frota/cliente/fazenda/área na exportação) */
+.mpick-wrap{position:relative}
+.mpick-btn{width:100%;padding:10px 22px 10px 10px;border:1px solid var(--borda);border-radius:8px;
+  font-size:14px;background:var(--painel);color:var(--tinta);text-align:left;cursor:pointer;position:relative}
+.mpick-btn::after{content:'▾';position:absolute;right:9px;top:50%;transform:translateY(-50%);color:#5a6b62;font-size:11px}
+.mpick-pop{display:none;margin-top:4px;border:1px solid var(--borda);border-radius:8px;
+  max-height:240px;overflow:auto;padding:4px;background:var(--painel)}
+.mpick-pop.aberto{display:block}
+.mpick-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:0;
+  font-size:12px;color:var(--tinta);cursor:pointer;border-radius:6px;text-transform:none;font-weight:600;letter-spacing:0}
+.mpick-pop label:hover{background:rgba(46,125,70,.10)}
+.mpick-pop label.todos{font-weight:700}
+.mpick-pop input{width:15px;height:15px;margin:0;accent-color:var(--verde)}
+.mpick-pop .sep{border-top:1px solid var(--borda);margin:3px 2px}
 .leaflet-popup-content{font-family:var(--mono);font-size:11px;margin:10px}
 .rotulo-faz{background:transparent;border:none;box-shadow:none;font-weight:800;font-size:13px;
   color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,1px 1px 2px #000}
@@ -274,13 +288,13 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="nada">Não separar — tudo num shape só</option>
       </select>
       <label>Filtrar frota</label>
-      <select id="exp-frota"></select>
-      <label>Filtrar cliente</label>
-      <select id="exp-cliente"><option value="*">Todos os clientes</option></select>
-      <label>Filtrar fazenda</label>
-      <select id="exp-faz"><option value="*">Todas as fazendas</option></select>
+      <div id="exp-frota-wrap" class="mpick-wrap"><button type="button" id="exp-frota-btn" class="mpick-btn">Todas as frotas</button><div id="exp-frota-pop" class="mpick-pop"></div></div>
+      <label id="exp-lbl-cliente">Filtrar cliente</label>
+      <div id="exp-cliente-wrap" class="mpick-wrap"><button type="button" id="exp-cliente-btn" class="mpick-btn">Todos os clientes</button><div id="exp-cliente-pop" class="mpick-pop"></div></div>
+      <label id="exp-lbl-faz">Filtrar fazenda</label>
+      <div id="exp-faz-wrap" class="mpick-wrap"><button type="button" id="exp-faz-btn" class="mpick-btn">Todas as fazendas</button><div id="exp-faz-pop" class="mpick-pop"></div></div>
       <label id="exp-lbl-area" style="display:none">Filtrar área (talhão do SHP)</label>
-      <select id="exp-area" style="display:none"><option value="*">Todas as áreas</option></select>
+      <div id="exp-area-wrap" class="mpick-wrap" style="display:none"><button type="button" id="exp-area-btn" class="mpick-btn">Todas as áreas</button><div id="exp-area-pop" class="mpick-pop"></div></div>
       <label>Filtrar dia</label>
       <div id="exp-dia-wrap">
         <button type="button" id="exp-dia-btn">Todos os dias</button>
@@ -317,7 +331,8 @@ const TODAS='*';
 function osDe(u){ return (u && (u.tarefa || u.talhao) || '').trim(); }
 /* Estados dos filtros novos (vazio = todos). Compartilhados por Mapa e Exportar. */
 const FILTRO = { cliente:TODAS, faz:TODAS, area:TODAS };      // Mapa
-const FILTRO_EXP = { cliente:TODAS, faz:TODAS, area:TODAS };  // Exportar
+/* Exportar: múltipla escolha — cada Set vazio significa "todos" */
+const EXP_FROTA=new Set(), EXP_CLIENTE=new Set(), EXP_FAZ=new Set(), EXP_AREA=new Set();
 
 /* ----- Filtro por Área (talhão do SHP): ponto dentro do polígono ----- */
 /* anéis em [lat,lon]; ray casting no plano lon(x)/lat(y). Rótulo de uma feição SHP
@@ -388,6 +403,24 @@ function unidTemArea(u, alvo){
   // varredura fina só se a amostragem não achou nada mas há sobreposição de bbox
   return false;
 }
+/* versões multi-área (Set de rótulos; usadas na exportação) */
+function pontoNasAreas(la, lo, setAlvos){
+  if(_AREAS_IDX===null) reindexarAreas();
+  if(!_AREAS_IDX) return false;
+  for(const a of _AREAS_IDX){
+    if(!setAlvos.has(a.rot)) continue;
+    if(la<a.bb[0]||la>a.bb[2]||lo<a.bb[1]||lo>a.bb[3]) continue;
+    for(const anel of a.aneis) if(pontoEmAnel(la,lo,anel)) return true;
+  }
+  return false;
+}
+function unidTemAreas(u, setAlvos){
+  if(!setAlvos.size) return true;
+  const passo = Math.max(1, Math.ceil(u.n/4000));
+  for(let i=0;i<u.n;i+=passo) if(u.larg[i]>0 && pontoNasAreas(u.lat[i],u.lon[i],setAlvos)) return true;
+  return false;
+}
+function escHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 /* ================= Entrada ================= */
 const inArq = document.getElementById('arq');
@@ -998,7 +1031,7 @@ function montarSeletores(){
   const ops = ['<option value="'+TODAS+'">Todas as frotas ('+fs.length+')</option>']
     .concat(fs.map(f=>'<option value="'+f+'">Frota '+f+'</option>'));
   document.getElementById('sel-frota').innerHTML = ops.join('');
-  document.getElementById('exp-frota').innerHTML = ops.join('');
+  pickerExpFrota.montar(fs);
   montarFiltrosClienteOS();
   // dias presentes (amostragem: primeiro, último e passos de 500 registros)
   const dias = new Set();
@@ -1025,19 +1058,24 @@ function _restaura(sel, valor){ // mantém a seleção anterior se ainda existir
 }
 function montarFiltrosClienteOS(){
   const cli=clientes(), faz=fazendas();
-  const selC=document.getElementById('sel-cliente'), expC=document.getElementById('exp-cliente');
-  const selF=document.getElementById('sel-faz'),     expF=document.getElementById('exp-faz');
-  selC.innerHTML=expC.innerHTML=_opcoes(cli,'Todos os clientes');
-  selF.innerHTML=expF.innerHTML=_opcoes(faz,'Todas as fazendas');
-  _restaura(selC,FILTRO.cliente); _restaura(expC,FILTRO_EXP.cliente);
-  _restaura(selF,FILTRO.faz);     _restaura(expF,FILTRO_EXP.faz);
-  FILTRO.cliente=selC.value; FILTRO_EXP.cliente=expC.value;
-  FILTRO.faz=selF.value;     FILTRO_EXP.faz=expF.value;
+  const selC=document.getElementById('sel-cliente');
+  const selF=document.getElementById('sel-faz');
+  selC.innerHTML=_opcoes(cli,'Todos os clientes');
+  selF.innerHTML=_opcoes(faz,'Todas as fazendas');
+  _restaura(selC,FILTRO.cliente);
+  _restaura(selF,FILTRO.faz);
+  FILTRO.cliente=selC.value;
+  FILTRO.faz=selF.value;
+  // exportação: múltipla escolha
+  pickerExpCliente.montar(cli);
+  pickerExpFaz.montar(faz);
   // esconde o seletor de cliente/fazenda se não houver nenhum valor (evita UI vazia)
-  for(const [wrapSel, len] of [['sel-cliente',cli.length],['exp-cliente',cli.length],['sel-faz',faz.length],['exp-faz',faz.length]]){
+  for(const [wrapSel, len] of [['sel-cliente',cli.length],['sel-faz',faz.length]]){
     const el=document.getElementById(wrapSel);
     el.parentElement && (el.style.display = len?'block':'none');
   }
+  document.getElementById('exp-cliente-wrap').style.display = document.getElementById('exp-lbl-cliente').style.display = cli.length?'block':'none';
+  document.getElementById('exp-faz-wrap').style.display     = document.getElementById('exp-lbl-faz').style.display     = faz.length?'block':'none';
   montarFiltroArea();
 }
 function invalidarAreas(){
@@ -1047,14 +1085,15 @@ function invalidarAreas(){
 function montarFiltroArea(){
   reindexarAreas();
   const areas=areasDisponiveis();
-  const selA=document.getElementById('sel-area'), expA=document.getElementById('exp-area');
+  const selA=document.getElementById('sel-area');
   const lblA=document.getElementById('lbl-sel-area'), expLbl=document.getElementById('exp-lbl-area');
-  const html=_opcoes(areas,'Todas as áreas');
-  selA.innerHTML=expA.innerHTML=html;
-  _restaura(selA,FILTRO.area); _restaura(expA,FILTRO_EXP.area);
-  FILTRO.area=selA.value; FILTRO_EXP.area=expA.value;
+  selA.innerHTML=_opcoes(areas,'Todas as áreas');
+  _restaura(selA,FILTRO.area);
+  FILTRO.area=selA.value;
+  pickerExpArea.montar(areas);
   const tem=areas.length>0;
-  selA.style.display=expA.style.display=lblA.style.display=expLbl.style.display = tem?'block':'none';
+  selA.style.display=lblA.style.display=expLbl.style.display = tem?'block':'none';
+  document.getElementById('exp-area-wrap').style.display = tem?'block':'none';
   const bAr=document.getElementById('busca-area');
   if(bAr) bAr.style.display = tem?'block':'none';
   montarBuscaResultados('');
@@ -1177,6 +1216,49 @@ function desenharMapaFiltro(){
 }
 const pickerMapa = criarPickerDias('dia-btn','dia-pop','dia-wrap', DIAS_SEL, desenharMapaFiltro);
 const pickerExp  = criarPickerDias('exp-dia-btn','exp-dia-pop','exp-dia-wrap', DIAS_EXP, null);
+
+/* Seletor genérico de múltipla escolha (lista de textos). Set vazio = todos.
+   Mesma UX do picker de dias: "Todos" + itens com checkbox, resumo no botão. */
+function criarPickerMulti(btnId, popId, wrapId, estado, rotuloTodos, onChange){
+  const btn = document.getElementById(btnId), pop = document.getElementById(popId);
+  let LISTA = [];
+  function resumo(){
+    const n = estado.size;
+    btn.textContent = n===0 ? rotuloTodos + (LISTA.length?' ('+LISTA.length+')':'')
+      : n===1 ? [...estado][0]
+      : n+' selecionados';
+  }
+  function montar(lista){
+    LISTA = (lista||[]).slice();
+    // preserva só a seleção que ainda existe
+    const novo = new Set([...estado].filter(v=>LISTA.includes(v)));
+    estado.clear(); novo.forEach(v=>estado.add(v));
+    let h = '<label class="todos"><input type="checkbox" class="pk-todos"'+(estado.size===0?' checked':'')+'> '+escHtml(rotuloTodos)+'</label><div class="sep"></div>';
+    h += LISTA.map((v,i)=>'<label><input type="checkbox" class="pk-item" data-i="'+i+'"'+(estado.has(v)?' checked':'')+'> '+escHtml(v)+'</label>').join('');
+    pop.innerHTML = h; resumo();
+    pop.querySelector('.pk-todos').addEventListener('change', function(){
+      if(this.checked){ estado.clear(); pop.querySelectorAll('.pk-item').forEach(c=>c.checked=false); }
+      else { this.checked = true; return; }
+      resumo(); onChange && onChange();
+    });
+    pop.querySelectorAll('.pk-item').forEach(c=>c.addEventListener('change', function(){
+      const v = LISTA[+this.dataset.i];
+      if(this.checked) estado.add(v); else estado.delete(v);
+      pop.querySelector('.pk-todos').checked = (estado.size===0);
+      resumo(); onChange && onChange();
+    }));
+  }
+  btn.addEventListener('click', function(e){ e.stopPropagation(); pop.classList.toggle('aberto'); });
+  document.addEventListener('click', function(e){
+    const w = document.getElementById(wrapId);
+    if(w && !w.contains(e.target)) pop.classList.remove('aberto');
+  });
+  return { montar, resumo };
+}
+const pickerExpFrota   = criarPickerMulti('exp-frota-btn','exp-frota-pop','exp-frota-wrap', EXP_FROTA,   'Todas as frotas',   null);
+const pickerExpCliente = criarPickerMulti('exp-cliente-btn','exp-cliente-pop','exp-cliente-wrap', EXP_CLIENTE, 'Todos os clientes', null);
+const pickerExpFaz     = criarPickerMulti('exp-faz-btn','exp-faz-pop','exp-faz-wrap', EXP_FAZ,     'Todas as fazendas', null);
+const pickerExpArea    = criarPickerMulti('exp-area-btn','exp-area-pop','exp-area-wrap', EXP_AREA,    'Todas as áreas',    null);
 
 function unidadesVisiveis(){
   const f = document.getElementById('sel-frota').value;
@@ -1409,21 +1491,22 @@ async function exportar(){
   await new Promise(r=>setTimeout(r,30));
   try{
     const sep = document.getElementById('exp-sep').value;
-    const fSel = document.getElementById('exp-frota').value;
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
-    // gera quads das unidades filtradas por frota/cliente/OS, depois filtra por dia e área
+    // gera quads das unidades filtradas por frota/cliente/fazenda, depois filtra por dia e área
+    // (cada Set vazio = "todos")
     let quads = [];
     for(const u of UNIDADES){
-      if(fSel!==TODAS && u.frota!==fSel) continue;
-      if(!unidPassaFiltro(u, FILTRO_EXP)) continue;
-      if(FILTRO_EXP.area!==TODAS && !unidTemArea(u, FILTRO_EXP.area)) continue;
+      if(EXP_FROTA.size   && !EXP_FROTA.has(u.frota)) continue;
+      if(EXP_CLIENTE.size && !EXP_CLIENTE.has((u.cliente||'').trim())) continue;
+      if(EXP_FAZ.size     && !EXP_FAZ.has((u.fazenda||'').trim())) continue;
+      if(EXP_AREA.size    && !unidTemAreas(u, EXP_AREA)) continue;
       quads = quads.concat(gerarQuadsUnidade(u, passoM, inv));
     }
     if(DIAS_EXP.size)
       quads = quads.filter(q=> DIAS_EXP.has(q.u.dataHora(q.idx).substring(0,10)));
-    if(FILTRO_EXP.area!==TODAS)
-      quads = quads.filter(q=> pontoNaArea(q.u.lat[q.idx], q.u.lon[q.idx], FILTRO_EXP.area));
+    if(EXP_AREA.size)
+      quads = quads.filter(q=> pontoNasAreas(q.u.lat[q.idx], q.u.lon[q.idx], EXP_AREA));
     if(!quads.length) throw new Error('Nenhum polígono no filtro escolhido.');
     // agrupa conforme a separação
     const chave = q => {
@@ -1990,9 +2073,8 @@ for(const id of ['sel-frota','sel-cor','sel-pal','sel-opac','chk-inv'])
 document.getElementById('sel-cliente').addEventListener('change', function(){ FILTRO.cliente=this.value; desenharMapaFiltro(); });
 document.getElementById('sel-faz').addEventListener('change',     function(){ FILTRO.faz=this.value;     desenharMapaFiltro(); });
 document.getElementById('sel-area').addEventListener('change',    function(){ FILTRO.area=this.value;    desenharMapaFiltro(); });
-document.getElementById('exp-cliente').addEventListener('change', function(){ FILTRO_EXP.cliente=this.value; });
-document.getElementById('exp-faz').addEventListener('change',     function(){ FILTRO_EXP.faz=this.value; });
-document.getElementById('exp-area').addEventListener('change',    function(){ FILTRO_EXP.area=this.value; });
+/* exp-frota/cliente/fazenda/área agora são seletores de múltipla escolha
+   (criarPickerMulti), que já mantêm seu próprio estado (EXP_FROTA/EXP_CLIENTE/EXP_FAZ/EXP_AREA) */
 /* ---- eventos da busca de área ---- */
 (function(){
   const inp=document.getElementById('busca-inp'), res=document.getElementById('busca-res'),
