@@ -47,6 +47,7 @@ tr:last-child td{border-bottom:none}
 .num{text-align:right}
 .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#e7f1e9;color:var(--verde-esc);font-family:var(--mono)}
 .tag.frota{background:#1d2b23;color:#fff}
+.tag.pos{background:#fff3e0;color:#b25000}
 select{width:100%;padding:10px;border:1px solid var(--borda);border-radius:8px;font-size:14px;background:var(--painel);color:var(--tinta);appearance:auto}
 #painel-mapa select{padding:7px;font-size:12px}
 label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercase;letter-spacing:.5px;display:block;margin:10px 0 4px}
@@ -420,6 +421,152 @@ function unidTemAreas(u, setAlvos){
   for(let i=0;i<u.n;i+=passo) if(u.larg[i]>0 && pontoNasAreas(u.lat[i],u.lon[i],setAlvos)) return true;
   return false;
 }
+/* ============================================================
+   FALLBACK ESPACIAL DE FAZENDA·TALHÃO (ponto-em-polígono)
+   ------------------------------------------------------------
+   Quando o cadastro do TASKDATA não traz o talhão referenciado
+   pela tarefa (PFD ausente ou "temporário"), a fazenda·talhão
+   fica em branco. Aqui atribuímos fazenda·talhão pela POSIÇÃO:
+   pega-se a coordenada predominante do log e vê-se em qual
+   polígono (SHP de talhão, SHP de perímetro, ou contorno interno
+   do próprio TASKDATA) ela cai. Não inventa nada — só usa os
+   polígonos que existem. Marcado como origem 'local' na UI.
+   ============================================================ */
+let _FALLBACK_IDX = null;                 // [{tipo:'talhao'|'perim', talhao, fazenda, aneis, bb}]
+let _FB_GRID = null; const _FB_STEP = 0.01;   // grade ~1,1km p/ acelerar ponto-em-polígono com muitos polígonos
+function _fbConstruirGrid(){
+  _FB_GRID=new Map();
+  for(let idx=0; idx<_FALLBACK_IDX.length; idx++){
+    const bb=_FALLBACK_IDX[idx].bb;
+    const x0=Math.floor(bb[0]/_FB_STEP), x1=Math.floor(bb[2]/_FB_STEP);
+    const y0=Math.floor(bb[1]/_FB_STEP), y1=Math.floor(bb[3]/_FB_STEP);
+    for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++){
+      const k=x+'|'+y; let arr=_FB_GRID.get(k); if(!arr){arr=[]; _FB_GRID.set(k,arr);} arr.push(idx);
+    }
+  }
+}
+const _RE_TS = /^\d{4}-\d\d-\d\d/;         // nome-timestamp de talhão temporário do monitor
+function _campoFazSHP(attrs){
+  if(!attrs) return '';
+  for(const k in attrs){
+    if(/fazend|^faz$|propried|faznome|nomefaz|farm|s[ií]tio|im[oó]vel|estab|unidad/i.test(k)){
+      const v=String(attrs[k]==null?'':attrs[k]).trim(); if(v) return v;
+    }
+  }
+  return '';
+}
+function _bbAneis(aneis){
+  let a=1e9,b=1e9,c=-1e9,d=-1e9;
+  for(const anel of aneis) for(const ll of anel){
+    if(ll[0]<a)a=ll[0]; if(ll[0]>c)c=ll[0]; if(ll[1]<b)b=ll[1]; if(ll[1]>d)d=ll[1];
+  }
+  return [a,b,c,d];
+}
+function reindexarFallback(){
+  _FALLBACK_IDX=[];
+  // 1) contornos internos do próprio TASKDATA (têm talhão + fazenda)
+  if(typeof TALHOES!=='undefined')
+    for(const t of TALHOES){
+      if(!t.aneis||!t.aneis.length) continue;
+      _FALLBACK_IDX.push({tipo:'talhao', talhao:t.nome||'', fazenda:t.fazenda||'', aneis:t.aneis, bb:_bbAneis(t.aneis)});
+    }
+  // 2) SHP de talhões (talhão = rótulo; fazenda = pasta-fazenda da hierarquia ou coluna auto-detectada)
+  if(typeof TALHOES_SHP!=='undefined' && TALHOES_SHP.length){
+    const campoTalh=(typeof ESTILO_SHP!=='undefined' && ESTILO_SHP.campoNomeTalh)||'auto';
+    for(const t of TALHOES_SHP){
+      if(!t.aneis||!t.aneis.length) continue;
+      _FALLBACK_IDX.push({tipo:'talhao', talhao:rotuloAreaSHP(t,campoTalh), fazenda:(t.fazendaPasta||'')||_campoFazSHP(t.attrs), aneis:t.aneis, bb:_bbAneis(t.aneis)});
+    }
+  }
+  // 3) SHP de perímetros (fazenda = rótulo ou pasta-fazenda da hierarquia)
+  if(typeof PERIMETROS!=='undefined' && PERIMETROS.length){
+    const campoPerim=(typeof ESTILO_SHP!=='undefined' && ESTILO_SHP.campoNome)||'auto';
+    for(const t of PERIMETROS){
+      if(!t.aneis||!t.aneis.length) continue;
+      _FALLBACK_IDX.push({tipo:'perim', talhao:'', fazenda:rotuloAreaSHP(t,campoPerim)||(t.fazendaPasta||''), aneis:t.aneis, bb:_bbAneis(t.aneis)});
+    }
+  }
+  _FB_GRID=null;   // grade reconstruída sob demanda
+}
+/* Resolve UMA coordenada -> {talhao, fazenda}. Talhão (mais específico) primeiro;
+   se ele não trouxer fazenda, completa pela fazenda do perímetro. */
+function resolverFTLocal(la,lo){
+  if(_FALLBACK_IDX===null) reindexarFallback();
+  if(_FB_GRID===null) _fbConstruirGrid();
+  const cand=_FB_GRID.get(Math.floor(la/_FB_STEP)+'|'+Math.floor(lo/_FB_STEP));
+  let talhao='', fazenda='';
+  if(cand){
+    for(const idx of cand){
+      const a=_FALLBACK_IDX[idx]; if(a.tipo!=='talhao') continue;
+      if(la<a.bb[0]||la>a.bb[2]||lo<a.bb[1]||lo>a.bb[3]) continue;
+      let dentro=false; for(const anel of a.aneis) if(pontoEmAnel(la,lo,anel)){dentro=true;break;}
+      if(dentro){ talhao=a.talhao||talhao; if(a.fazenda) fazenda=a.fazenda; break; }
+    }
+    if(!fazenda) for(const idx of cand){
+      const a=_FALLBACK_IDX[idx]; if(a.tipo!=='perim') continue;
+      if(la<a.bb[0]||la>a.bb[2]||lo<a.bb[1]||lo>a.bb[3]) continue;
+      let dentro=false; for(const anel of a.aneis) if(pontoEmAnel(la,lo,anel)){dentro=true;break;}
+      if(dentro){ fazenda=a.fazenda; break; }
+    }
+  }
+  return {talhao, fazenda};
+}
+/* Amostra ~50 pontos da unidade e escolhe o resultado predominante
+   (robusto a ruído de GPS na borda e a tarefa que cruza 2 talhões). */
+function resolverFTUnidade(u){
+  if(_FALLBACK_IDX===null) reindexarFallback();
+  if(!_FALLBACK_IDX||!_FALLBACK_IDX.length) return null;
+  const passo=Math.max(1, Math.ceil(u.n/50));
+  const temLarg=!!u.larg;
+  const cont=new Map(); let melhor=null, melhorC=0;
+  for(let i=0;i<u.n;i+=passo){
+    if(temLarg && !(u.larg[i]>0)) continue;
+    const la=u.lat[i], lo=u.lon[i];
+    if(!la&&!lo) continue;
+    const r=resolverFTLocal(la,lo);
+    if(!r.fazenda && !r.talhao) continue;
+    const chave=r.fazenda+'\u0001'+r.talhao;
+    const c=(cont.get(chave)||0)+1; cont.set(chave,c);
+    if(c>melhorC){ melhorC=c; melhor=r; }
+  }
+  return melhor;
+}
+/* Reaplica fazenda·talhão a todas as unidades: sempre parte do cadastro
+   (fazendaCad/talhaoCad) e só usa a posição quando o cadastro não deu.
+   Retorna {resolvidas, semFaz, comPoligono}. Reversível: chamar de novo
+   após trocar/limpar o SHP recalcula do zero. */
+function aplicarFallbackFT(){
+  reindexarFallback();
+  const temPoli = _FALLBACK_IDX.length>0;
+  let resolvidas=0, semFaz=0;
+  for(const u of UNIDADES){
+    if(!u._ftInit){ u.fazendaCad=u.fazenda||''; u.talhaoCad=u.talhao||''; u._ftInit=true; }
+    // reset para o estado do cadastro
+    u.fazenda=u.fazendaCad; u.talhao=u.talhaoCad;
+    u.fonteFT=(u.fazendaCad||u.talhaoCad)?'cadastro':'';
+    if(u.fazendaCad){ continue; }          // cadastro já resolveu a fazenda
+    if(temPoli){
+      const r=resolverFTUnidade(u);
+      if(r && (r.fazenda||r.talhao)){
+        if(r.fazenda) u.fazenda=r.fazenda;
+        const talRuim = !u.talhaoCad || _RE_TS.test(u.talhaoCad);   // vazio ou nome-timestamp
+        if(r.talhao && talRuim) u.talhao=r.talhao;
+        u.fonteFT='local'; resolvidas++;
+        continue;
+      }
+    }
+    if(!u.fazenda) semFaz++;
+  }
+  return {resolvidas, semFaz, comPoligono:temPoli};
+}
+/* Reprocessa e atualiza tabela + filtros (usado quando o SHP muda). */
+function reprocessarFallback(){
+  _FALLBACK_IDX=null;
+  const r=aplicarFallbackFT();
+  if(typeof montarTabelas==='function') montarTabelas();
+  if(typeof montarFiltrosClienteOS==='function') montarFiltrosClienteOS();
+  return r;
+}
 function escHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 /* ================= Entrada ================= */
@@ -445,7 +592,11 @@ async function tratar(lista){
     }
     if(!UNIDADES.length) throw new Error('Nenhum dado reconhecido (TLG XML+BIN ou *_PPD_FullData.csv).');
     const totalN = UNIDADES.reduce((s,u)=>s+u.n,0);
-    st.textContent = new Set(UNIDADES.map(u=>u.frota)).size+' frota(s) · '+UNIDADES.length+' unidade(s) · '+totalN.toLocaleString('pt-BR')+' registros';
+    const ft = aplicarFallbackFT();   // fazenda·talhão por posição p/ tarefas sem cadastro
+    let msg = new Set(UNIDADES.map(u=>u.frota)).size+' frota(s) · '+UNIDADES.length+' unidade(s) · '+totalN.toLocaleString('pt-BR')+' registros';
+    if(ft.resolvidas) msg += ' · '+ft.resolvidas+' fazenda·talhão por posição';
+    if(ft.semFaz)     msg += ' · '+ft.semFaz+' sem fazenda'+(ft.comPoligono?'':' (importe o SHP de talhões/perímetros p/ resolver)');
+    st.textContent = msg;
     montarTabelas();
     montarSeletores();
   }catch(err){
@@ -1016,7 +1167,8 @@ function montarTabelas(){
   const tb = document.querySelector('#tab-unids tbody');
   tb.innerHTML='';
   for(const u of UNIDADES){
-    const fzTal = [u.fazenda, u.talhao].filter(Boolean).join(' · ') || '—';
+    let fzTal = [u.fazenda, u.talhao].filter(Boolean).join(' · ') || '—';
+    if(u.fonteFT==='local' && fzTal!=='—') fzTal += ' <span class="tag pos" title="Atribuído pela posição (GPS dentro do polígono do SHP/contorno) — o cadastro do TASKDATA não trazia este talhão">pos.</span>';
     tb.innerHTML += '<tr><td><span class="tag frota">'+u.frota+'</span></td>'+
       '<td><span class="tag">'+u.nome+'</span></td><td>'+u.fonte+'</td>'+
       '<td style="font-family:inherit">'+fzTal+'</td>'+
@@ -1079,8 +1231,12 @@ function montarFiltrosClienteOS(){
   montarFiltroArea();
 }
 function invalidarAreas(){
-  _AREAS_IDX=null;
-  if(document.getElementById('sel-area')) montarFiltroArea();
+  _AREAS_IDX=null; _FALLBACK_IDX=null;
+  if(typeof UNIDADES!=='undefined' && UNIDADES.length){
+    reprocessarFallback();   // reprocessa fazenda·talhão por posição e já refaz tabela+filtros(+área)
+  } else if(document.getElementById('sel-area')){
+    montarFiltroArea();
+  }
 }
 function montarFiltroArea(){
   reindexarAreas();
@@ -1466,7 +1622,7 @@ function abrirPopup(e){
   let extra = '';
   if(u.cliente) extra += '<tr><td>Cliente</td><td class="num"><b>'+u.cliente+'</b></td></tr>';
   if(osDe(u)) extra += '<tr><td>OS</td><td class="num"><b>'+osDe(u)+'</b></td></tr>';
-  if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+([u.fazenda,u.talhao].filter(Boolean).join(' · '))+'</b></td></tr>';
+  if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+([u.fazenda,u.talhao].filter(Boolean).join(' · '))+'</b>'+(u.fonteFT==='local'?' <span style="font-weight:600;color:#b25000">(pos.)</span>':'')+'</td></tr>';
   if(u.tarefa) extra += '<tr><td>Tarefa</td><td class="num">'+u.tarefa+'</td></tr>';
   const html = '<b>Frota '+u.frota+' · '+u.nome+'</b> ('+u.fonte+')<br>'+u.dataHora(i)+'<br>'+
     u.lat[i].toFixed(7)+', '+u.lon[i].toFixed(7)+'<table>'+extra+
@@ -1807,6 +1963,16 @@ function utmParaLL(x,y,cmDeg,fnorte,k0){
 }
 
 /* conjuntos: [{shp:ArrayBuffer, dbf:ArrayBuffer|null, prj:string|null}] -> entradas {nome,aneis} */
+/* Deriva a FAZENDA do caminho da hierarquia de pastas.
+   Padrão do Jean: "<FAZENDA>/OS<num>/<num>.shp" (a pasta OS<num> é o talhão).
+   Ignora a pasta OS<num> e o arquivo; a fazenda é a pasta imediatamente acima. */
+function fazendaDoCaminho(caminho){
+  if(!caminho) return '';
+  const partes = caminho.split(/[\/\\]/).filter(Boolean);
+  partes.pop();  // remove o arquivo .shp
+  while(partes.length && /^os[\s_.\-]*\d+/i.test(partes[partes.length-1])) partes.pop();  // remove pasta(s) OS<num>
+  return partes.length ? partes[partes.length-1].trim() : '';
+}
 function montarPerimetros(conjuntos){
   const saida=[];
   for(const cj of conjuntos){
@@ -1814,6 +1980,7 @@ function montarPerimetros(conjuntos){
     let nomes=[], regsAll=[];
     if(cj.dbf){ try{ const d=parseDbf(cj.dbf); regsAll=d.regs; const c=campoDoNome(d.campos); nomes=c?d.regs.map(r=>r[c]||''):[]; }catch(e){} }
     const prj=infoPrj(cj.prj);
+    const fazPasta=(cj.fazenda||'').trim();
     for(let i=0;i<formas.length;i++){
       const f=formas[i]; if(!f) continue;
       const primeiro=f[0]&&f[0][0];
@@ -1830,7 +1997,8 @@ function montarPerimetros(conjuntos){
         const ll=anel.map(conv).filter(p=>isFinite(p[0])&&isFinite(p[1])&&Math.abs(p[0])<=90&&Math.abs(p[1])<=180&&!(p[0]===0&&p[1]===0));
         if(ll.length>=3) aneis.push(ll);
       }
-      if(aneis.length) saida.push({nome:(nomes[i]||'').trim(), attrs:regsAll[i]||null, aneis});
+      // fazendaPasta = fazenda vinda do nome da pasta (não polui os attrs nem o rótulo do talhão)
+      if(aneis.length) saida.push({nome:(nomes[i]||'').trim(), attrs:regsAll[i]||null, aneis, fazendaPasta:fazPasta});
     }
   }
   return saida;
@@ -1860,20 +2028,21 @@ async function adicionarPerimetros(lista, tipo){
           const zn=caminho.toLowerCase();
           const base=caminho.replace(/\.[^.]+$/,'').toLowerCase();
           brutos[base]=brutos[base]||{};
-          if(zn.endsWith('.shp')) brutos[base].shp=await z.async('arraybuffer');
+          if(zn.endsWith('.shp')){ brutos[base].shp=await z.async('arraybuffer'); brutos[base].caminho=caminho; }
           else if(zn.endsWith('.dbf')) brutos[base].dbf=await z.async('arraybuffer');
           else if(zn.endsWith('.prj')) brutos[base].prj=await z.async('string');
         }
       } else {
         const base=f.name.replace(/\.[^.]+$/,'').toLowerCase();
         brutos[base]=brutos[base]||{};
-        if(nm.endsWith('.shp')) brutos[base].shp=await f.arrayBuffer();
+        if(nm.endsWith('.shp')){ brutos[base].shp=await f.arrayBuffer(); brutos[base].caminho=brutos[base].caminho||f.name; }
         else if(nm.endsWith('.dbf')) brutos[base].dbf=await f.arrayBuffer();
         else if(nm.endsWith('.prj')) brutos[base].prj=await f.text();
       }
     }
     const conjuntos=Object.values(brutos).filter(b=>b.shp);
     if(!conjuntos.length) throw new Error('Nenhum .shp encontrado nos arquivos escolhidos.');
+    for(const cj of conjuntos) cj.fazenda = fazendaDoCaminho(cj.caminho);   // pasta-fazenda da hierarquia
     const novos=montarPerimetros(conjuntos);
     if(!novos.length) throw new Error('Nenhum polígono válido no shapefile.');
     const perim = tipo==='perim';
@@ -1883,9 +2052,11 @@ async function adicionarPerimetros(lista, tipo){
     popularSelectAtributos(); aplicarNomes();
     const colunas=new Set();
     for(const nv of novos) if(nv.attrs) Object.keys(nv.attrs).forEach(k=>colunas.add(k));
+    const fazendasPasta=[...new Set(novos.map(nv=>(nv.fazendaPasta||'').trim()).filter(Boolean))];
+    const infoFaz = fazendasPasta.length ? ' Fazendas (pastas): '+fazendasPasta.slice(0,8).join(', ')+(fazendasPasta.length>8?' …':'')+'.' : '';
     const infoCol = colunas.size ? ' Colunas: '+[...colunas].sort().join(', ')+'.'
                                  : ' ATENÇÃO: nenhum .dbf pareado — inclua o .dbf junto para ter os nomes.';
-    statusShp(tipo, novos.length+' '+(perim?'perímetro(s)':'talhão(ões)')+' importados e salvos.'+infoCol);
+    statusShp(tipo, novos.length+' '+(perim?'perímetro(s)':'talhão(ões)')+' importados e salvos.'+infoFaz+infoCol);
     invalidarAreas();
     desenharCamadasShp(true);
   }catch(err){
@@ -1931,7 +2102,7 @@ function lerEstiloControles(){
 function nomeAuto(attrs){
   if(!attrs) return '';
   const chaves=Object.keys(attrs);
-  const pref=chaves.find(k=>/FAZ|NOME|NAME|PROP|IMOVEL/i.test(k) && String(attrs[k]).trim());
+  const pref=chaves.find(k=>/FAZ|NOME|NAME|PROP|IMOVEL|TALH/i.test(k) && String(attrs[k]).trim());
   if(pref) return String(attrs[pref]).trim();
   const outro=chaves.find(k=>String(attrs[k]).trim() && isNaN(Number(attrs[k])));
   return outro?String(attrs[outro]).trim():'';
