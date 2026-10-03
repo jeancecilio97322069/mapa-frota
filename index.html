@@ -286,7 +286,13 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="cliente">Cliente — 1 shape por cliente</option>
         <option value="fazenda">Fazenda — 1 shape por fazenda</option>
         <option value="talhao">Talhão — 1 shape por talhão</option>
+        <option value="os">OS — 1 shape por OS (pasta Fazenda/OSxxxx)</option>
         <option value="nada">Não separar — tudo num shape só</option>
+      </select>
+      <label>Colunas do shape</label>
+      <select id="exp-cols">
+        <option value="simpl">Simplificado — TALHAO, LARG_M, VEL_KMH, ALT_M, TAXA_REAL</option>
+        <option value="full">Completo — + DATA_HORA, FROTA, UNIDADE, FAZENDA, TAREFA</option>
       </select>
       <label>Filtrar frota</label>
       <div id="exp-frota-wrap" class="mpick-wrap"><button type="button" id="exp-frota-btn" class="mpick-btn">Todas as frotas</button><div id="exp-frota-pop" class="mpick-pop"></div></div>
@@ -305,7 +311,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <button class="botao" id="btn-exportar">Gerar e compartilhar</button>
       <div id="exp-status" style="font-size:12px;font-family:var(--mono);color:var(--tinta2);margin-top:8px"></div>
       <div style="font-size:11px;color:var(--tinta2);margin-top:10px">
-        Colunas: DATA_HORA · FROTA · UNIDADE · FAZENDA · TALHAO · TAREFA · LARG_M · VEL_KMH · ALT_M · TAXA_REAL (L/ha) — WGS84
+        Simplificado: TALHAO · LARG_M · VEL_KMH · ALT_M · TAXA_REAL. Completo acrescenta DATA_HORA · FROTA · UNIDADE · FAZENDA · TAREFA. TAXA_REAL em L/ha — WGS84
       </div>
     </div>
   </div>
@@ -1197,6 +1203,14 @@ function montarSeletores(){
     lista.map(d=>'<option value="'+d+'">'+d.split('-').reverse().join('/')+'</option>').join('');
   pickerMapa.montar(lista);
   pickerExp.montar(lista);
+  // opção "por OS" só disponível quando há talhão/OS carregado
+  const temTalhao = UNIDADES.some(u=>(u.talhao||'').trim());
+  const optOS = document.querySelector('#exp-sep option[value="os"]');
+  if(optOS){
+    optOS.disabled = !temTalhao;
+    const selSep = document.getElementById('exp-sep');
+    if(!temTalhao && selSep.value==='os') selSep.value='talhao';
+  }
 }
 function clientes(){ return [...new Set(UNIDADES.map(u=>(u.cliente||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR')); }
 function fazendas(){ return [...new Set(UNIDADES.map(u=>(u.fazenda||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR',{numeric:true})); }
@@ -1647,6 +1661,7 @@ async function exportar(){
   await new Promise(r=>setTimeout(r,30));
   try{
     const sep = document.getElementById('exp-sep').value;
+    const simpl = (document.getElementById('exp-cols')||{}).value !== 'full';
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
     // gera quads das unidades filtradas por frota/cliente/fazenda, depois filtra por dia e área
@@ -1670,6 +1685,7 @@ async function exportar(){
       if(sep==='cliente') return 'CLI_'+nomeSeguro(q.u.cliente||'SEM_CLIENTE');
       if(sep==='fazenda') return 'FAZ_'+nomeSeguro(q.u.fazenda||'SEM_FAZENDA');
       if(sep==='talhao') return 'TAL_'+nomeSeguro((q.u.fazenda?q.u.fazenda+'_':'')+(q.u.talhao||'SEM_TALHAO'));
+      if(sep==='os') return 'OS_'+nomeSeguro((q.u.fazenda||'')+'__'+(q.u.talhao||'SEM_OS'));
       return 'FAIXAS';
     };
     const grupos = new Map();
@@ -1687,16 +1703,27 @@ async function exportar(){
     for(const [rot, lista] of grupos){
       st.textContent = rot+'… ('+lista.length.toLocaleString('pt-BR')+' polígonos)';
       await new Promise(r=>setTimeout(r,10));
-      const s = gerarSHPfaixa(lista);
-      const nomeArq = rot+sufDia;
-      const destino = grupos.size>1 ? zip.folder(nomeArq) : zip;
-      destino.file(nomeArq+'.shp', s.shp); destino.file(nomeArq+'.shx', s.shx);
-      destino.file(nomeArq+'.dbf', s.dbf); destino.file(nomeArq+'.prj', PRJ);
+      const s = gerarSHPfaixa(lista, simpl);
+      let pasta, base;
+      if(sep==='os'){
+        // espelha a hierarquia de importação: <FAZENDA>/OS<num>/<num>.shp
+        const u0=lista[0].u;
+        const faz = nomeSeguro(u0.fazenda||'SEM_FAZENDA');
+        const osTxt = (u0.talhao||'').trim();
+        const num = osTxt.replace(/^\s*OS[\s_.\-]*/i,'').trim() || 'SEM_OS';
+        pasta = faz+'/OS'+nomeSeguro(num);
+        base = nomeSeguro(num)+sufDia;
+      } else {
+        pasta = rot+sufDia; base = rot+sufDia;
+      }
+      const destino = (grupos.size>1 || sep==='os') ? zip.folder(pasta) : zip;
+      destino.file(base+'.shp', s.shp); destino.file(base+'.shx', s.shx);
+      destino.file(base+'.dbf', s.dbf); destino.file(base+'.prj', PRJ);
       nOk++;
     }
     const blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
-    const arqNome = (grupos.size>1
-      ? 'FAIXAS_'+nOk+'_'+({frota:'FROTAS',cliente:'CLIENTES',fazenda:'FAZENDAS',talhao:'TALHOES'}[sep]||'GRUPOS')
+    const arqNome = ((grupos.size>1 || sep==='os')
+      ? 'FAIXAS_'+nOk+'_'+({frota:'FROTAS',cliente:'CLIENTES',fazenda:'FAZENDAS',talhao:'TALHOES',os:'OS'}[sep]||'GRUPOS')
       : [...grupos.keys()][0]+sufDia) + '.zip';
     st.textContent = arqNome+' · '+nOk+' shapefile(s) · '+(blob.size/1024).toFixed(0)+' KB';
     await entregarArquivo(blob, arqNome);
@@ -1787,7 +1814,7 @@ function gerarDBF(campos, linhas){
   u8[buf.byteLength-1]=0x1A;
   return buf;
 }
-function gerarSHPfaixa(quads){
+function gerarSHPfaixa(quads, simpl){
   const n = quads.length;
   const recBytes = 136;
   const shpLen = 100 + n*recBytes;
@@ -1825,18 +1852,31 @@ function gerarSHPfaixa(quads){
     }
     o+=recBytes;
   });
-  const campos = [['DATA_HORA','C',23],['FROTA','C',10],['UNIDADE','C',10],
-    ['FAZENDA','C',24],['TALHAO','C',12],['TAREFA','C',32],
-    ['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
-  const linhas = quads.map(q=>{
-    const u=q.u, i=q.idx;
-    return [u.dataHora(i), u.frota, u.nome,
-      u.fazenda||'', u.talhao||'', u.tarefa||'',
-      q.largM.toFixed(2),
-      q.velKmh===null?'':q.velKmh.toFixed(1),
-      isNaN(u.alt[i])?'':u.alt[i].toFixed(1),
-      isNaN(u.taxa[i])?'':u.taxa[i].toFixed(2)];
-  });
+  let campos, linhas;
+  if(simpl){
+    // formato enxuto (padrão dos SHP do Jean): TALHAO + métricas
+    campos = [['TALHAO','C',12],['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
+    linhas = quads.map(q=>{
+      const u=q.u, i=q.idx;
+      return [u.talhao||'', q.largM.toFixed(2),
+        q.velKmh===null?'':q.velKmh.toFixed(1),
+        isNaN(u.alt[i])?'':u.alt[i].toFixed(1),
+        isNaN(u.taxa[i])?'':u.taxa[i].toFixed(2)];
+    });
+  } else {
+    campos = [['DATA_HORA','C',23],['FROTA','C',10],['UNIDADE','C',10],
+      ['FAZENDA','C',24],['TALHAO','C',12],['TAREFA','C',32],
+      ['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
+    linhas = quads.map(q=>{
+      const u=q.u, i=q.idx;
+      return [u.dataHora(i), u.frota, u.nome,
+        u.fazenda||'', u.talhao||'', u.tarefa||'',
+        q.largM.toFixed(2),
+        q.velKmh===null?'':q.velKmh.toFixed(1),
+        isNaN(u.alt[i])?'':u.alt[i].toFixed(1),
+        isNaN(u.taxa[i])?'':u.taxa[i].toFixed(2)];
+    });
+  }
   return {shp:shp.buffer, shx:shx.buffer, dbf:gerarDBF(campos,linhas), n};
 }
 const PRJ='GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
