@@ -337,6 +337,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 const UNIDADES = [];
 const TALHOES = [];
 let mapa=null, camada=null, camadaTalhoes=null;
+let MAPA_SUJO=false, RENDER_PINTURA=null, RENDER_DESTAQUE=null;   // sujo = dados novos ainda não desenhados
 const TODAS='*';
 
 /* OS = ordem de serviço: vem editada no campo Tarefa (TSK@B) ou, quando vazio,
@@ -603,6 +604,7 @@ async function tratar(lista){
       await carregarZip(zip, frota, st);
     }
     if(!UNIDADES.length) throw new Error('Nenhum dado reconhecido (TLG XML+BIN, *_PPD_FullData.csv, *_PPD.pbz ou RCD/StoredMaps do GS3).');
+    MAPA_SUJO = true;
     const totalN = UNIDADES.reduce((s,u)=>s+u.n,0);
     const ft = aplicarFallbackFT();   // fazenda·talhão por posição p/ tarefas sem cadastro
     let msg = new Set(UNIDADES.map(u=>u.frota)).size+' frota(s) · '+UNIDADES.length+' unidade(s) · '+totalN.toLocaleString('pt-BR')+' registros';
@@ -611,6 +613,7 @@ async function tratar(lista){
     st.textContent = msg;
     montarTabelas();
     montarSeletores();
+    if(mapa && document.getElementById('tela-mapa').classList.contains('ativa')) desenharMapa();
   }catch(err){
     st.textContent = 'Erro: '+err.message; st.style.color='var(--vermelho)';
   }
@@ -1752,11 +1755,16 @@ function focarUnidade(ix){
   garantirMapa();
   setTimeout(()=>{
     mapa.invalidateSize();
-    if(!camada || liberou){ try{ desenharMapa(true); }catch(e){ console.warn('desenharMapa', e); } }
+    if(!camada || liberou || MAPA_SUJO){ try{ desenharMapa(true); }catch(e){ console.warn('desenharMapa', e); } }
     const lim = L.latLngBounds(bb[0], bb[1]);
     mapa.fitBounds(lim.pad(0.08), {maxZoom:18});
     // destaque rápido do enquadramento
-    const r = L.rectangle(lim, {color:'#c9871b', weight:2, dashArray:'6 5', fill:false, interactive:false}).addTo(mapa);
+    if(!mapa.getPane('destaque')){
+      const pn = mapa.createPane('destaque'); pn.style.zIndex = 650; pn.style.pointerEvents = 'none';
+    }
+    if(!RENDER_DESTAQUE) RENDER_DESTAQUE = L.svg({pane:'destaque'});
+    const r = L.rectangle(lim, {color:'#c9871b', weight:2, dashArray:'6 5', fill:false, interactive:false,
+      pane:'destaque', renderer:RENDER_DESTAQUE}).addTo(mapa);
     setTimeout(()=>{ try{ mapa.removeLayer(r); }catch(e){} }, 2500);
   }, 80);
 }
@@ -2098,6 +2106,7 @@ function desenharTalhoes(){
 }
 function desenharMapa(manterVista){
   garantirMapa();
+  MAPA_SUJO = false;
   const leg = document.getElementById('legenda');
   if(camada){ mapa.removeLayer(camada); camada=null; }
   const unids = unidadesVisiveis();
@@ -2122,7 +2131,9 @@ function desenharMapa(manterVista){
   }
   const NB=12;
   const bucket = v => (mx>mn && !isNaN(v)) ? Math.max(0,Math.min(NB-1, Math.floor((v-mn)/(mx-mn)*NB))) : 0;
-  const render = L.canvas({padding:.3});
+  // um único canvas para a pintura, sempre por cima das camadas de apoio (cliques chegam no popup)
+  if(RENDER_PINTURA){ try{ mapa.removeLayer(RENDER_PINTURA); }catch(e){} }
+  const render = RENDER_PINTURA = L.canvas({padding:.3});
   const pols=[]; let limites=null; let areaTotal=0;
   const areaFrota = {};
   const areaFaz = {};
@@ -2859,7 +2870,7 @@ document.querySelectorAll('.aba').forEach(b=>{
     document.getElementById('tela-'+b.dataset.tela).classList.add('ativa');
     if(b.dataset.tela==='mapa'){
       garantirMapa();
-      setTimeout(()=>{ mapa.invalidateSize(); if(!camada) desenharMapa(); },60);
+      setTimeout(()=>{ mapa.invalidateSize(); if(!camada || MAPA_SUJO) desenharMapa(); },60);
     }
   });
 });
