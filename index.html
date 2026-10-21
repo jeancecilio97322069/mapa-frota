@@ -24,6 +24,12 @@ header p{font-size:11px;opacity:.85;font-family:var(--mono)}
 #abas{display:flex;background:var(--painel);border-bottom:1px solid var(--borda);flex-shrink:0}
 .aba{flex:1;padding:11px 4px;text-align:center;font-size:13px;font-weight:600;color:var(--tinta2);
   border:none;background:none;border-bottom:3px solid transparent;cursor:pointer}
+.btn-globo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  border:1px solid var(--borda);border-radius:50%;background:var(--painel);color:var(--verde);cursor:pointer;padding:0}
+.btn-globo:hover,.btn-globo:active{background:var(--verde);color:#fff;border-color:var(--verde)}
+.btn-globo:disabled{opacity:.3;cursor:default;background:var(--painel);color:var(--tinta2)}
+.btn-globo svg{width:15px;height:15px}
+td.globo,th.globo{text-align:center;width:40px;padding-left:4px;padding-right:4px}
 .aba.ativa{color:var(--verde);border-bottom-color:var(--verde)}
 main{flex:1;overflow:hidden;position:relative}
 .tela{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;padding:14px}
@@ -142,7 +148,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
 <body>
 <header>
   <h1>Mapa de Frota — aplicação unificada</h1>
-  <p>ISO-XML (TASKDATA) + Topcon C3000 · frota = nome do zip</p>
+  <p>ISO-XML (TASKDATA) + Topcon C3000 + X25/X30 (.pbz) + John Deere GS3 2630 · frota = nome do zip</p>
 </header>
 
 <div id="abas">
@@ -156,7 +162,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
   <div class="tela ativa" id="tela-arquivos">
     <div id="zona-drop">
       <strong>Toque para escolher os .zip das frotas</strong>
-      <p>ex.: 1006.zip (C3000) + 1008.zip (TASKDATA ISO-XML) — pode selecionar vários de uma vez</p>
+      <p>ex.: 1006.zip (C3000) + 1008.zip (TASKDATA ISO-XML) + pasta de dados do X25/X30 (*_PPD.pbz) + pasta RCD do GS3 2630 — pode selecionar vários de uma vez</p>
       <button class="botao" onclick="document.getElementById('arq').click()">Escolher arquivos</button>
       <input type="file" id="arq" multiple accept=".zip,.ZIP">
     </div>
@@ -175,7 +181,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
     <div class="cartao" id="cartao-unids" style="display:none">
       <h2>Frotas e unidades carregadas</h2>
       <div style="overflow-x:auto"><table id="tab-unids">
-        <thead><tr><th>Frota</th><th>Unidade</th><th>Fonte</th><th>Fazenda · Talhão</th><th class="num">Registros</th><th>Início</th><th>Fim</th></tr></thead>
+        <thead><tr><th>Frota</th><th>Unidade</th><th>Fonte</th><th>Cliente</th><th>Fazenda</th><th>Talhão (OS)</th><th>Operação</th><th class="globo" title="Ver no mapa">Mapa</th><th class="num">Registros</th><th>Início</th><th>Fim</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </div>
@@ -596,7 +602,7 @@ async function tratar(lista){
       const zip = await JSZip.loadAsync(f);
       await carregarZip(zip, frota, st);
     }
-    if(!UNIDADES.length) throw new Error('Nenhum dado reconhecido (TLG XML+BIN ou *_PPD_FullData.csv).');
+    if(!UNIDADES.length) throw new Error('Nenhum dado reconhecido (TLG XML+BIN, *_PPD_FullData.csv, *_PPD.pbz ou RCD/StoredMaps do GS3).');
     const totalN = UNIDADES.reduce((s,u)=>s+u.n,0);
     const ft = aplicarFallbackFT();   // fazenda·talhão por posição p/ tarefas sem cadastro
     let msg = new Set(UNIDADES.map(u=>u.frota)).size+' frota(s) · '+UNIDADES.length+' unidade(s) · '+totalN.toLocaleString('pt-BR')+' registros';
@@ -610,7 +616,7 @@ async function tratar(lista){
   }
 }
 async function carregarZip(zip, frota, st){
-  const xmls={}, bins={}, csvs={}, inis={}, metas={}, pdfs={}, xmlCadastro=[];
+  const xmls={}, bins={}, csvs={}, inis={}, metas={}, pdfs={}, xmlCadastro=[], pbzs=[], gs3={}, gs3Doc={}; let gs3Setup='';
   function idJob(caminho, prefixo){
     const partes = caminho.split('/');
     if(partes.length>=2){
@@ -634,6 +640,33 @@ async function carregarZip(zip, frota, st){
     else if(cima.endsWith('_PPD_FULLDATA.CSV')){
       const id = idJob(caminho, base.replace(/_PPD_FullData\.csv$/i,''));
       (csvs[id] = csvs[id]||[]).push(await z.async('string'));
+    }
+    else if(/\/STOREDMAPS\//.test('/'+caminho.toUpperCase()) && /\.(PTH|PVF)$/.test(cima)){
+      // GS3 2630: RCD/StoredMaps/<xx>/<talhão erid>/<tarefa erid>/{CoverageLayer|Operation_*}_SecN.{pth,pvf}
+      const dir = caminho.substring(0, caminho.length-base.length);
+      const g = gs3[dir] = gs3[dir] || {dir, op:{}};
+      const bytes = await z.async('arraybuffer');
+      if(/^COVERAGELAYER_/.test(cima)) g[cima.endsWith('.PTH')?'pth':'pvf'] = bytes;
+      else if(cima.endsWith('.PVF')) g.op[base] = bytes;
+    }
+    else if(/\/DOCUMENTATION\//.test('/'+caminho.toUpperCase()) && /\.(FDL|FDD)$/.test(cima)){
+      // GS3 2630: RCD/EIC/Documentation/<xx>/<log>.fdl (XML de configuração) + .fdd (dados EvenByteDelta)
+      const chave = caminho.replace(/\.[^.]+$/,'').toLowerCase();
+      const g = gs3Doc[chave] = gs3Doc[chave] || {chave};
+      if(cima.endsWith('.FDL')) g.fdl = new TextDecoder('windows-1252').decode(await z.async('uint8array'));
+      else g.fdd = await z.async('arraybuffer');
+    }
+    else if(cima==='SETUP.FDS' && /\/EIC\//i.test('/'+caminho)){
+      const by = await z.async('uint8array');
+      const cab = new TextDecoder('latin1').decode(by.subarray(0,200));
+      const latin = /encoding\s*=\s*["'](ISO-8859-1|latin-?1|windows-1252)["']/i.test(cab);
+      let txt;
+      if(latin) txt = new TextDecoder('windows-1252').decode(by);
+      else { try{ txt = new TextDecoder('utf-8',{fatal:true}).decode(by); }catch(e){ txt = new TextDecoder('windows-1252').decode(by); } }
+      gs3Setup = txt.replace(/^\uFEFF/,'');
+    }
+    else if(cima.endsWith('_PPD.PBZ')){
+      pbzs.push({caminho, base, bytes: await z.async('uint8array')});
     }
     else if(cima.endsWith('_PPD.INI')){
       const id = idJob(caminho, base.replace(/_PPD\.ini$/i,''));
@@ -704,6 +737,489 @@ async function carregarZip(zip, frota, st){
       UNIDADES.push(u);
     }
   }
+  // Topcon X25/X30 (Horizon) — <job>_PPD.pbz
+  for(const pz of pbzs){
+    const id = idJob(pz.caminho, pz.base.replace(/_PPD\.pbz$/i,''));
+    st.textContent = frota+' · X30 job '+id+'…';
+    await new Promise(r=>setTimeout(r,10));
+    let u=null;
+    try{ u = await normalizarPBZ(pz.bytes, frota, id); }
+    catch(e){ console.warn('pbz', pz.caminho, e); }
+    pz.bytes = null;
+    if(!u) continue;
+    // estrutura Horizon: <Cliente>/<Fazenda>/<Talhão>/Jobs/<job>/
+    const partes = pz.caminho.split('/');
+    const j = partes.map(x=>x.toUpperCase()).lastIndexOf('JOBS');
+    u.tarefa = '';
+    u.talhao  = (j>=1 ? partes[j-1] : '') || id;
+    u.fazenda = j>=2 ? partes[j-2] : '';
+    u.cliente = j>=3 ? partes[j-3] : '';
+    if(!u.fazenda){
+      const nomes = acharNomesJob(metas[id]);
+      u.fazenda = nomes.fazenda||''; u.cliente = u.cliente||nomes.cliente||'';
+    }
+    UNIDADES.push(u);
+  }
+  // John Deere GS3 2630 — Documentation (log ponto a ponto: tempo, velocidade, taxa, seções)
+  const talhoesComLog = new Set();
+  const chavesDoc = Object.keys(gs3Doc).filter(k=>gs3Doc[k].fdl && gs3Doc[k].fdd).sort();
+  if(chavesDoc.length){
+    const logs=[];
+    let nLog=0;
+    for(const k of chavesDoc){
+      const g = gs3Doc[k];
+      st.textContent = frota+' · GS3 log '+(++nLog)+'/'+chavesDoc.length+'…';
+      await new Promise(r=>setTimeout(r,5));
+      try{
+        const cfg = parseFDL(g.fdl);
+        const lg = decodificarFDD(g.fdd, cfg);
+        if(lg && lg.n){ logs.push(lg); if(cfg.fieldErid) talhoesComLog.add(cfg.fieldErid); }
+      }catch(e){ console.warn('gs3 fdd', k, e); }
+      g.fdd=null; g.fdl=null;
+    }
+    // uma unidade por Cliente/Fazenda/OS/Operação (logs em ordem de tempo)
+    const grupos = new Map();
+    for(const lg of logs){
+      const ch = [lg.cfg.client, lg.cfg.farm, lg.cfg.field, lg.cfg.task].join('\u0001');
+      if(!grupos.has(ch)) grupos.set(ch, []);
+      grupos.get(ch).push(lg);
+    }
+    for(const lista of grupos.values()){
+      lista.sort((a,b)=>a.tempo[0]-b.tempo[0]);
+      const u = juntarLogsGS3(lista, frota);
+      if(u) UNIDADES.push(u);
+    }
+  }
+  // John Deere GS3 2630 — StoredMaps (mapa de cobertura) só para talhões sem log na Documentation
+  const dirsGS3 = Object.keys(gs3).filter(d=>gs3[d].pth && gs3[d].pvf).filter(d=>{
+    const partes=d.split('/').filter(Boolean); return !talhoesComLog.has((partes[partes.length-2]||'').toLowerCase());
+  }).sort();
+  if(dirsGS3.length){
+    const cad = cadastroGS3(gs3Setup);
+    for(const dir of dirsGS3){
+      const g = gs3[dir];
+      st.textContent = frota+' · GS3 '+dir.split('/').slice(-3,-2)[0]+'…';
+      await new Promise(r=>setTimeout(r,10));
+      let u=null;
+      try{ u = normalizarGS3(g, frota); }catch(e){ console.warn('gs3', dir, e); }
+      g.pth=g.pvf=null; g.op={};
+      if(!u) continue;
+      const partes = dir.split('/').filter(Boolean);
+      const erTal = (partes[partes.length-2]||'').toLowerCase();
+      const erTar = (partes[partes.length-1]||'').toLowerCase();
+      const tal = cad.field[erTal]||{}, faz = cad.farm[tal.farm]||{};
+      // mesmo padrão do Topcon: Cliente / Fazenda / Talhão (= OS); unidade = OS
+      u.talhao  = tal.nome || erTal.substring(0,8);
+      u.fazenda = faz.nome || '';
+      u.cliente = cad.client[faz.client] || '';
+      u.tarefa  = '';
+      u.operacao = cad.task[erTar] || '';
+      u.nome    = u.talhao;
+      UNIDADES.push(u);
+    }
+  }
+}
+
+/* ================= John Deere GS3 2630 — RCD/EIC/Documentation (.fdl + .fdd) =================
+   .fdl = XML: Client/Farm/Field(=OS)/Task(operação)/produto, larguras e offsets das seções, colunas usadas
+          e LogTaskRegion@timeStamp (UTC) = instante do 1º registro.
+   .fdd = "EvenByteDelta":
+     cabeçalho: lista de colunas  [u16 tipo][u16 nl+3][u16 nl][nome][u8 esparsa]
+        tipo 1 (enum)  : [u16 nItens][u16 bytes] + itens (u16 len + texto)
+        tipo 3/4/5     : [u16 24] + 3 doubles = (escala, delta máx, valor inicial)
+     registros: [02 00][u8 temBloco][5 bytes][máscara A: colunas ausentes][máscara B: colunas "escapadas"]
+        parte densa = colunas não-esparsas, fora de A e B, na ordem do cabeçalho:
+           tipo 4 = int32 delta, tipo 3 = int16 delta, enum = int16 absoluto (índice)
+        se temBloco: [03 00][u16 nb][máscara M] + p/ cada coluna com bit 0 em M: [u16 tipo][u16 len][valor absoluto]
+           (double p/ numéricas, u16 p/ enum) — usado em valores esparsos e nos escapes (ex.: rumo 359->0, saltos de taxa)
+   Validado contra a exportação do AgroCAD (27.590 pontos, OS os4889): posição, hora, rumo, velocidade
+   e taxa aplicada idênticos. */
+function parseFDL(t){
+  const at=(re)=>{ const m=t.match(re); return m?m[1]:''; };
+  const nome=(tag)=>at(new RegExp('<rcdsetup:'+tag+'\\b[^>]*\\bname="([^"]*)"'));
+  const dec=v=>v.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  const cfg={
+    client:dec(nome('Client')), farm:dec(nome('Farm')), field:dec(nome('Field')), task:dec(nome('Task')),
+    produto:dec(nome('Chemical')||nome('Fertilizer')||nome('Variety')||nome('Product')),
+    maquina:dec(nome('Machine')),
+    fieldErid:at(/<FieldRef eridRef="\{([^}]+)\}/).toLowerCase(),
+    ts:Date.parse(at(/<LogTaskRegion\b[^>]*\btimeStamp="([^"]+)"/))||0,
+    largEquip:(parseFloat(at(/<rcdsetup:vrDistance value="([\d.]+)" sourceUOM="mm" variableRepresentation="vrEquipmentWidth"/))||0)/1000
+  };
+  // posição: referência do implemento (dtiComputedImplement) se houver; senão a antena
+  const navs=[...t.matchAll(/<NavigationReference>([\s\S]*?)<\/NavigationReference>/g)].map(m=>m[1]);
+  const nav = navs.find(x=>/dtiComputedImplement/.test(x)) || navs[0] || '';
+  const col=(x,vr)=>{ const m=x.match(new RegExp('<'+vr+' columnID="([^"]+)"')); return m?m[1]:''; };
+  cfg.cLat=col(nav,'vrLatitude'); cfg.cLon=col(nav,'vrLongitude'); cfg.cHead=col(nav,'vrHeading'); cfg.cElev=col(nav,'vrElevation');
+  // velocidade
+  cfg.cVel = at(/columnID="([^"]+)"[^>]*variableRepresentation="vrVehicleSpeed"/);
+  // medidor de taxa (1º Meter com elemento medido) e suas seções
+  const uomF = u => /^ml1ha-1$/i.test(u)?1/1000 : /^g1ha-1$/i.test(u)?1/1000 : 1;   // -> L/ha (kg/ha)
+  cfg.cMeas=''; cfg.cTgt=''; cfg.fMeas=1; cfg.fTgt=1;
+  let secRefs=null;
+  for(const m of t.matchAll(/<Meter\b[^>]*>([\s\S]*?)<\/Meter>/g)){
+    const x=m[1];
+    const me=x.match(/<MeasuredElement>\s*<VariableNumberColumn columnID="([^"]+)" sourceUOM="([^"]+)"/);
+    if(!me) continue;
+    cfg.cMeas=me[1]; cfg.fMeas=uomF(me[2]);
+    const tg=x.match(/<TargetElement>\s*<VariableNumberColumn columnID="([^"]+)" sourceUOM="([^"]+)"/);
+    if(tg){ cfg.cTgt=tg[1]; cfg.fTgt=uomF(tg[2]); }
+    secRefs=[...x.matchAll(/<SectionRef idRef="(\d+)"/g)].map(r=>r[1]);
+    break;
+  }
+  const mm=(v,u)=>{ v=parseFloat(v)||0; return u==='mm'?v/1000 : u==='cm'?v/100 : u==='in'?v*0.0254 : u==='ft'?v*0.3048 : v; };
+  let secs=[];
+  for(const m of t.matchAll(/<Section id="(\d+)">([\s\S]*?)<\/Section>/g)){
+    const x=m[2];
+    const lat=x.match(/vrLateralOffset value="([-\d.]+)" sourceUOM="(\w+)"/);
+    const w=x.match(/vrSectionWidth value="([\d.]+)" sourceUOM="(\w+)"/);
+    const c=x.match(/columnID="([^"]+_State)"/);
+    if(!w||!c) continue;
+    secs.push({id:m[1], col:c[1], larg:mm(w[1],w[2]), lat:lat?mm(lat[1],lat[2]):0});
+  }
+  if(secRefs && secRefs.length){ const s2=secs.filter(s=>secRefs.includes(s.id)); if(s2.length) secs=s2; }
+  // descarta seção "mestre" que cobre a barra toda quando há seções individuais
+  if(secs.length>1){ const tot=secs.reduce((a,s)=>a+s.larg,0); secs=secs.filter(s=>Math.abs(s.larg*2-tot)>0.01 || secs.length<3); }
+  secs.sort((a,b)=>a.lat-b.lat);   // esquerda -> direita
+  cfg.secoes=secs;
+  return cfg;
+}
+function decodificarFDD(buf, cfg){
+  const b=new Uint8Array(buf), dv=new DataView(buf);
+  const u16=p=>dv.getUint16(p,true);
+  // --- cabeçalho de colunas
+  let p=0;
+  const okNome=(a,n)=>{ for(let k=0;k<n;k++){ const c=b[a+k]; if(c<48||c>122) return false; } return true; };
+  while(p<b.length-6){
+    const t=u16(p), tot=u16(p+2), nl=u16(p+4);
+    if(t>=1 && t<=6 && tot===nl+3 && nl>3 && nl<60 && okNome(p+6,nl)) break;
+    p++;
+  }
+  const cols=[];
+  while(p+6<=b.length){
+    const t=u16(p), tot=u16(p+2), nl=u16(p+4);
+    if(!(t>=1 && t<=6 && tot===nl+3)) break;
+    let nome=''; for(let k=0;k<nl;k++) nome+=String.fromCharCode(b[p+6+k]);
+    p+=6+nl; const esparsa=b[p]; p+=1;
+    const c={t, nome, esparsa, esc:1, base:0};
+    if(t===1){ const cnt=u16(p), nb=u16(p+2); p+=4+nb; c.n=cnt; }
+    else { const sz=u16(p); p+=2; if(sz>=24){ c.esc=dv.getFloat64(p,true); c.base=dv.getFloat64(p+16,true); } p+=sz; }
+    cols.push(c);
+  }
+  const nc=cols.length, nb=(nc+7)>>3;
+  if(!nc) return null;
+  const ix={}; cols.forEach((c,k)=>ix[c.nome]=k);
+  const kLat=ix[cfg.cLat], kLon=ix[cfg.cLon];
+  if(kLat===undefined||kLon===undefined) return null;
+  const kHd=ix[cfg.cHead], kEl=ix[cfg.cElev], kVel=ix[cfg.cVel], kMe=ix[cfg.cMeas], kTg=ix[cfg.cTgt], kEt=ix['ElapsedTime'];
+  const kSec=cfg.secoes.map(s=>ix[s.col]);
+  const cur=new Float64Array(nc), acc=new Float64Array(nc);
+  cols.forEach((c,k)=>{ cur[k]= c.t===1 ? 0 : c.base; });
+  const lerMask=(a)=>{ const m=new Uint8Array(nb); for(let k=0;k<nb;k++) m[k]=b[a+k]; return m; };
+  const bit=(m,k)=>(m[k>>3]>>(k&7))&1;
+  const R={lat:[],lon:[],hd:[],el:[],ve:[],me:[],tg:[],et:[],mk:[]};
+  let i=p;
+  while(i+8+2*nb<=b.length){
+    if(b[i]!==2 || b[i+1]!==0 || b[i+2]>1) break;
+    const tr=b[i+2];
+    const A=lerMask(i+8), B=lerMask(i+8+nb);
+    i+=8+2*nb;
+    for(let k=0;k<nc;k++){
+      const c=cols[k];
+      if(c.esparsa || bit(A,k) || bit(B,k)) continue;
+      let v;
+      if(c.t===4){ v=dv.getInt32(i,true); i+=4; } else { v=dv.getInt16(i,true); i+=2; }
+      if(c.t===1) cur[k]=v; else { acc[k]+=v; cur[k]=c.base+acc[k]*c.esc; }
+    }
+    if(tr){
+      if(u16(i)!==3 || u16(i+2)!==nb) break;
+      const M=lerMask(i+4); i+=4+nb;
+      for(let k=0;k<nc;k++){
+        if(bit(M,k)) continue;
+        const ln=u16(i+2), q=i+4; i+=4+ln;
+        let v=null;
+        if(ln===8) v=dv.getFloat64(q,true); else if(ln===2) v=u16(q); else if(ln===4) v=dv.getInt32(q,true);
+        if(v===null) continue;
+        cur[k]=v;
+        const c=cols[k];
+        if((c.t===3||c.t===4) && c.esc) acc[k]=Math.round((v-c.base)/c.esc);
+      }
+    }
+    R.lat.push(cur[kLat]); R.lon.push(cur[kLon]);
+    R.hd.push(kHd!==undefined?cur[kHd]:0); R.el.push(kEl!==undefined?cur[kEl]:NaN);
+    R.ve.push(kVel!==undefined?cur[kVel]:NaN);
+    R.me.push(kMe!==undefined?cur[kMe]*cfg.fMeas:NaN); R.tg.push(kTg!==undefined?cur[kTg]*cfg.fTgt:NaN);
+    R.et.push(kEt!==undefined?cur[kEt]:R.et.length*200);
+    let m=0; for(let s=0;s<kSec.length;s++){ const k=kSec[s]; if(k!==undefined && cur[k]===0) m|=(1<<s); }   // índice 0 = Ligado
+    R.mk.push(m);
+  }
+  const n=R.lat.length;
+  return {cfg, n, lat:R.lat, lon:R.lon, hd:R.hd, el:R.el, ve:R.ve, me:R.me, tg:R.tg, mk:R.mk,
+          tempo:R.et.map(e=>cfg.ts+e)};
+}
+function juntarLogsGS3(lista, frota){
+  // concatena logs (já em ordem de tempo); entre logs entra um ponto-sentinela (0,0) que fecha a faixa
+  const cfg=lista[0].cfg;
+  let secs=cfg.secoes;
+  let n=0; for(const lg of lista) n+=lg.n; n+=lista.length-1;
+  const lat=new Float64Array(n), lon=new Float64Array(n), larg=new Float32Array(n);
+  const taxa=new Float32Array(n).fill(NaN), alvo=new Float32Array(n).fill(NaN), vel=new Float32Array(n).fill(NaN), alt=new Float32Array(n).fill(NaN);
+  const head=new Float32Array(n), mask=new Int32Array(n), tempo=new Float64Array(n);
+  let j=0;
+  for(let L=0;L<lista.length;L++){
+    const lg=lista[L], ss=lg.cfg.secoes.length?lg.cfg.secoes:[{larg:lg.cfg.largEquip||0}];
+    const semSec=!lg.cfg.secoes.length;
+    if(L>0){ tempo[j]=lg.tempo[0]; j++; }
+    for(let i=0;i<lg.n;i++,j++){
+      lat[j]=lg.lat[i]; lon[j]=lg.lon[i]; head[j]=lg.hd[i]; alt[j]=lg.el[i];
+      vel[j]=lg.ve[i]; taxa[j]=lg.me[i]; alvo[j]=lg.tg[i]; tempo[j]=lg.tempo[i];
+      const m = semSec ? 1 : lg.mk[i];
+      mask[j]=m;
+      let w=0; for(let s=0;s<ss.length;s++) if(m>>s&1) w+=ss[s].larg;
+      larg[j]=w;
+    }
+  }
+  if(!secs.length) secs=[{larg:cfg.largEquip||0}];
+  const total=secs.reduce((a,s)=>a+s.larg,0), meia=total/2; let acc=0;
+  const ini={secoes:secs.map(s=>s.larg), largTotal:total, offsets:secs.map(s=>{const o=[acc-meia,acc+s.larg-meia]; acc+=s.larg; return o;})};
+  const pad=v=>String(v).padStart(2,'0');
+  const fmt=i=>{ const d=new Date(tempo[i]); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); };
+  return {frota, fonte:'GS3', nome:cfg.field||'—', n, lat, lon, larg, taxa, alvo, vel, alt, tempo, head, mask, ini, dataHora:fmt,
+    cliente:cfg.client, fazenda:cfg.farm, talhao:cfg.field, tarefa:'', operacao:cfg.task, produto:cfg.produto, maquina:cfg.maquina,
+    nLogs:lista.length};
+}
+
+/* ================= John Deere GS3 2630 — RCD/StoredMaps =================
+   CoverageLayer_SecN.pth (LE):
+     0  u32 versão | 4 GUID(16) | 20 f64 lat0 | 28 f64 lon0 | 36 u32 data (unix s) | 40 u32 nº seções | ... | 64:
+     bloco: u32 nPontos | u32 nSeções | f32 largura (m) | nSeções×(f32 fim, f32 início) frações da barra (esq->dir)
+            nPontos × (f32 xEsq, f32 y, f32 xDir, f32 y)  metros locais, x=leste y=norte a partir de lat0/lon0
+            (xEsq/xDir = centro ∓ largura/2 → usa-se o centro; rumo sai da sequência de pontos)
+     depois: índice de passadas (não usado — passada quebra por salto > 3 m; espaçamento normal 0,4–0,7 m)
+   CoverageLayer_SecN.pvf: u32 1 | u32 nPontos×nSeções | f32[] 1=seção aplicando, 0=fechada
+   Operation_*_SecN.pvf:   mesma forma, valor por seção = taxa (ml/ha -> L/ha)
+   Orientação validada contra as posições do .fdd (Documentation) do mesmo talhão: erro < 2 m. */
+function cadastroGS3(txt){
+  const out={client:{}, farm:{}, field:{}, task:{}};
+  if(!txt) return out;
+  const at = (tag, nome)=>{ const m=tag.match(new RegExp('\\b'+nome+'="([^"]*)"')); return m?m[1]:''; };
+  const id = v => v.replace(/[{}]/g,'').toLowerCase();
+  const dec = v => v.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  for(const m of txt.matchAll(/<(Client|Farm|Field|Task)\b[^>]*>/g)){
+    const tag=m[0], tipo=m[1], er=id(at(tag,'erid')), nome=dec(at(tag,'name'));
+    if(!er) continue;
+    if(tipo==='Client') out.client[er]=nome;
+    else if(tipo==='Farm') out.farm[er]={nome, client:id(at(tag,'clientRef'))};
+    else if(tipo==='Field') out.field[er]={nome, farm:id(at(tag,'farmRef'))};
+    else out.task[er]=nome;
+  }
+  return out;
+}
+function normalizarGS3(g, frota){
+  const dv = new DataView(g.pth);
+  if(g.pth.byteLength < 80) return null;
+  const lat0 = dv.getFloat64(20,true), lon0 = dv.getFloat64(28,true);
+  const ts = dv.getUint32(36,true);
+  let p = 64;
+  const np = dv.getUint32(p,true), ns = dv.getUint32(p+4,true), largB = dv.getFloat32(p+8,true);
+  if(!np || !ns || ns>64 || p+12+8*ns+16*np > g.pth.byteLength) return null;
+  const fr=[];
+  for(let k=0;k<ns;k++) fr.push([dv.getFloat32(p+12+8*k+4,true), dv.getFloat32(p+12+8*k,true)]); // [início, fim]
+  fr.sort((a,b)=>a[0]-b[0]);
+  const secoes = fr.map(([a,b])=>Math.round((b-a)*largB*1000)/1000);
+  p += 12+8*ns;
+  // cobertura por seção
+  const cv = new DataView(g.pvf), ncv = cv.getUint32(4,true);
+  if(ncv !== np*ns) return null;
+  // taxa (primeiro Operation_*.pvf com o mesmo tamanho)
+  let ov=null;
+  for(const k of Object.keys(g.op).sort()){
+    const d=new DataView(g.op[k]); if(d.byteLength>=8 && d.getUint32(4,true)===np*ns){ ov=d; break; }
+  }
+  // metros por grau (WGS84) na latitude de origem
+  const fi = lat0*Math.PI/180;
+  const mLat = 111132.92 - 559.82*Math.cos(2*fi) + 1.175*Math.cos(4*fi);
+  const mLon = 111412.84*Math.cos(fi) - 93.5*Math.cos(3*fi);
+  // centros + máscaras
+  const cx=new Float64Array(np), cy=new Float64Array(np), mk=new Int32Array(np), tx=new Float32Array(np).fill(NaN);
+  for(let i=0;i<np;i++){
+    const q=p+16*i;
+    cx[i]=(dv.getFloat32(q,true)+dv.getFloat32(q+8,true))/2;
+    cy[i]=(dv.getFloat32(q+4,true)+dv.getFloat32(q+12,true))/2;
+    let m=0, soma=0, nOn=0;
+    for(let s=0;s<ns;s++){
+      // pvf na ordem das seções do arquivo; fr foi ordenado esq->dir (normalmente já vem assim)
+      if(cv.getFloat32(8+4*(i*ns+s),true) > 0.5) m |= (1<<s);
+      if(ov){ const v=ov.getFloat32(8+4*(i*ns+s),true); if(v>0){ soma+=v; nOn++; } }
+    }
+    mk[i]=m;
+    if(nOn) tx[i]=soma/nOn/1000;
+  }
+  // quebras de passada (salto > 3 m) viram um ponto-sentinela (0,0) que fecha a faixa
+  const SALTO=3;
+  let nq=0; for(let i=1;i<np;i++) if(Math.hypot(cx[i]-cx[i-1],cy[i]-cy[i-1])>SALTO) nq++;
+  const n=np+nq;
+  const lat=new Float64Array(n), lon=new Float64Array(n), larg=new Float32Array(n);
+  const taxa=new Float32Array(n).fill(NaN), vel=new Float32Array(n).fill(NaN), alt=new Float32Array(n).fill(NaN);
+  const head=new Float32Array(n), mask=new Int32Array(n);
+  const cache=new Map();
+  const largDe = m => { let w=cache.get(m); if(w===undefined){ w=0; for(let s=0;s<ns;s++) if(m>>s&1) w+=secoes[s]; cache.set(m,w);} return w; };
+  let j=0, iniPass=0;
+  const salto = i => i>0 && Math.hypot(cx[i]-cx[i-1],cy[i]-cy[i-1])>SALTO;
+  for(let i=0;i<np;i++){
+    if(salto(i)){ j++; iniPass=i; }   // sentinela já zerada (lat=lon=0, larg=0)
+    // rumo pela diferença centrada dentro da passada
+    let a=i-1, b=i+1;
+    if(a<iniPass) a=i;
+    if(b>=np || salto(b)) b=i;
+    if(a===b){ head[j] = j>0 ? head[j-1] : 0; }
+    else head[j] = (Math.atan2(cx[b]-cx[a], cy[b]-cy[a])*180/Math.PI + 360) % 360;
+    lat[j]=lat0+cy[i]/mLat; lon[j]=lon0+cx[i]/mLon;
+    mask[j]=mk[i]; larg[j]=largDe(mk[i]); taxa[j]=tx[i];
+    j++;
+  }
+  const total=secoes.reduce((s,w)=>s+w,0), meia=total/2; let acc=0;
+  const ini={secoes, largTotal:total, offsets:secoes.map(w=>{const o=[acc-meia,acc+w-meia]; acc+=w; return o;})};
+  const dh = new Date(ts*1000).toISOString().replace('T',' ').substring(0,19);
+  return {frota, fonte:'GS3', nome:'', n, lat, lon, larg, taxa, vel, alt,
+    tempo:null, head, mask, ini, dataHora:()=>dh};
+}
+
+/* ================= Topcon X25/X30 (Horizon) — <job>_PPD.pbz =================
+   Arquivo = vários membros gzip concatenados (um a cada ~10 KB). Descomprimido:
+   [assinatura varint só no 1º bloco] + sequência de [tamanho varint][mensagem protobuf].
+   Mensagem:  2 = cabeçalho de sessão (2.4.2 produto, 2.5.2 largura barra,
+                  2.5.3.1* larguras das seções, float)
+              3 = amostra (~10 Hz), DELTA: só traz o que mudou -> estado carregado
+                  3.1.1 posição: 1/2 lat/lon antena(double), 4/5 lat/lon implemento(double),
+                        6 altitude(double), 3/7 rumo veículo/implemento(float),
+                        8 velocidade m/s(float), 10 HRMS(float)
+                  3.1.2.1 dia juliano (Qt)   3.1.3.1 ms do dia
+                  3.1.5.2 taxa alvo   3.1.6.2 taxa real (L/ha)
+                  3.1.7.2.2 máscara de seções (bit i = seção i)
+   Validado: área GPS = área por velocidade×tempo×largura; tempo c/ seção bate com OperatingTime. */
+async function gunzip1(u8){
+  const resp = new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip')));
+  return new Uint8Array(await resp.arrayBuffer());
+}
+async function gunzipMulti(u8){
+  // início de membro: 1f 8b 08 (cabeçalho gzip). Se um candidato for falso,
+  // a descompressão falha e o trecho é estendido até o próximo candidato.
+  const ini=[];
+  for(let i=0;i<=u8.length-10;i++) if(u8[i]===0x1f && u8[i+1]===0x8b && u8[i+2]===0x08) ini.push(i);
+  if(!ini.length || ini[0]!==0) throw new Error('não é gzip');
+  ini.push(u8.length);
+  const partes=[]; let a=0, tot=0;
+  for(let k=1;k<ini.length;k++){
+    try{ const p=await gunzip1(u8.subarray(ini[a],ini[k])); partes.push(p); tot+=p.length; a=k; }
+    catch(e){ if(k===ini.length-1) throw e; }
+  }
+  const out=new Uint8Array(tot); let o=0;
+  for(const p of partes){ out.set(p,o); o+=p.length; }
+  return out;
+}
+async function normalizarPBZ(gz, frota, nome){
+  const b = await gunzipMulti(gz);
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let pos=0;
+  function vi(){ let r=0, m=1, c; do{ c=b[pos++]; r+=(c&0x7f)*m; m*=128; }while(c&0x80); return r; }
+  // percorre campos [ini,fim) chamando cb(campo, wire, valor|início, fimDoCampo)
+  function campos(ini, fim, cb){
+    pos=ini;
+    while(pos<fim){
+      const k=vi(), f=Math.floor(k/8), w=k&7;
+      if(w===0){ const v=vi(); const p=pos; cb(f,0,v,p); pos=p; }
+      else if(w===1){ const p=pos; pos+=8; cb(f,1,p,pos); pos=p+8; }
+      else if(w===5){ const p=pos; pos+=4; cb(f,5,p,pos); pos=p+4; }
+      else if(w===2){ const l=vi(), p=pos; cb(f,2,p,p+l); pos=p+l; }
+      else throw new Error('wire '+w);
+    }
+  }
+  const f32=p=>dv.getFloat32(p,true), f64=p=>dv.getFloat64(p,true);
+  function sub1(ini,fim,alvo,tipo){ // lê um campo escalar dentro de uma submensagem
+    let v; const sv=pos;
+    campos(ini,fim,(f,w,x)=>{ if(f===alvo) v = tipo==='f'?f32(x):(tipo==='d'?f64(x):x); });
+    pos=sv; return v;
+  }
+  let secoes=null;
+  const st={lat:NaN,lon:NaN,alt:NaN,hd:0,ve:NaN,jd:0,ms:0,ra:NaN,mk:0};
+  const A={lat:[],lon:[],alt:[],hd:[],ve:[],tp:[],ra:[],mk:[]};
+  function amostra(ini,fim){
+    const sv=pos;
+    campos(ini,fim,(f,w,x,e)=>{
+      if(f!==1||w!==2) return;
+      campos(x,e,(g,w2,y,e2)=>{
+        if(g===1 && w2===2){
+          campos(y,e2,(h,w3,z)=>{
+            if(h===4) st.lat=f64(z); else if(h===5) st.lon=f64(z);
+            else if(h===6) st.alt=f64(z); else if(h===7) st.hd=f32(z);
+            else if(h===8) st.ve=f32(z);
+          });
+        }
+        else if(g===2 && w2===2){ const v=sub1(y,e2,1,'v'); if(v!==undefined) st.jd=v; }
+        else if(g===3 && w2===2){ const v=sub1(y,e2,1,'v'); if(v!==undefined) st.ms=v; }
+        else if(g===6 && w2===2){ const v=sub1(y,e2,2,'f'); if(v!==undefined) st.ra=v; }
+        else if(g===7 && w2===2){
+          let mk=0; const sv2=pos;
+          campos(y,e2,(h,w3,z,e3)=>{ if(h===2&&w3===2){ const v=sub1(z,e3,2,'v'); mk=v||0; } });
+          pos=sv2; st.mk=mk;
+        }
+      });
+    });
+    pos=sv;
+    if(!isFinite(st.lat)||!isFinite(st.lon)||(st.lat===0&&st.lon===0)) return;
+    A.lat.push(st.lat); A.lon.push(st.lon); A.alt.push(st.alt); A.hd.push(st.hd);
+    A.ve.push(st.ve); A.ra.push(st.ra); A.mk.push(st.mk);
+    A.tp.push((st.jd-2440588)*86400000 + st.ms);   // dia juliano Qt -> ms Unix
+  }
+  function cabecalho(ini,fim){
+    const sv=pos;
+    campos(ini,fim,(f,w,x,e)=>{
+      if(f===5 && w===2){
+        campos(x,e,(g,w2,y,e2)=>{
+          if(g===3 && w2===2){
+            const ls=[]; campos(y,e2,(h,w3,z)=>{ if(h===1&&w3===5) ls.push(f32(z)); });
+            if(ls.length) secoes=ls;
+          }
+        });
+      }
+    });
+    pos=sv;
+  }
+  // blocos
+  let p=0, primeiro=true;
+  while(p<b.length){
+    pos=p;
+    if(primeiro){ vi(); primeiro=false; }   // assinatura
+    const l=vi(), ini=pos, fim=ini+l;
+    if(fim>b.length) break;
+    campos(ini,fim,(f,w,x,e)=>{
+      if(f===2&&w===2) cabecalho(x,e);
+      else if(f===3&&w===2) amostra(x,e);
+    });
+    p=fim;
+  }
+  const n=A.lat.length;
+  if(!n) return null;
+  if(!secoes||!secoes.length) secoes=[0];
+  const total=secoes.reduce((s,w)=>s+w,0), meia=total/2; let acc=0;
+  const ini={secoes, largTotal:total,
+    offsets: secoes.map(w=>{const o=[acc-meia,acc+w-meia]; acc+=w; return o;})};
+  const lat=Float64Array.from(A.lat), lon=Float64Array.from(A.lon);
+  const larg=new Float32Array(n), taxa=Float32Array.from(A.ra), vel=new Float32Array(n);
+  const alt=Float32Array.from(A.alt), head=Float32Array.from(A.hd);
+  const mask=Int32Array.from(A.mk), tempo=Float64Array.from(A.tp);
+  const cache=new Map();
+  for(let i=0;i<n;i++){
+    const mk=mask[i];
+    let lg=cache.get(mk);
+    if(lg===undefined){ lg=0; for(let s=0;s<secoes.length;s++) if(mk>>s&1) lg+=secoes[s]; cache.set(mk,lg); }
+    larg[i]=lg;
+    vel[i]=isFinite(A.ve[i])?A.ve[i]*3.6:NaN;
+  }
+  const fmt=i=>new Date(tempo[i]).toISOString().replace('T',' ').substring(0,19);
+  return {frota, fonte:'X30', nome, n, lat, lon, larg, taxa, vel, alt,
+    tempo, head, mask, ini, dataHora:fmt};
 }
 
 
@@ -1172,16 +1688,77 @@ function bordas(cadeia){
 function montarTabelas(){
   const tb = document.querySelector('#tab-unids tbody');
   tb.innerHTML='';
-  for(const u of UNIDADES){
-    let fzTal = [u.fazenda, u.talhao].filter(Boolean).join(' · ') || '—';
-    if(u.fonteFT==='local' && fzTal!=='—') fzTal += ' <span class="tag pos" title="Atribuído pela posição (GPS dentro do polígono do SHP/contorno) — o cadastro do TASKDATA não trazia este talhão">pos.</span>';
+  UNIDADES.forEach((u,ix)=>{
+    const tagPos = (u.fonteFT==='local') ? ' <span class="tag pos" title="Atribuído pela posição (GPS dentro do polígono do SHP/contorno) — o cadastro do TASKDATA não trazia este talhão">pos.</span>' : '';
+    const cel = v => v ? escHtml(v) : '<span style="color:var(--tinta2)">—</span>';
     tb.innerHTML += '<tr><td><span class="tag frota">'+u.frota+'</span></td>'+
       '<td><span class="tag">'+u.nome+'</span></td><td>'+u.fonte+'</td>'+
-      '<td style="font-family:inherit">'+fzTal+'</td>'+
+      '<td style="font-family:inherit">'+cel(u.cliente)+'</td>'+
+      '<td style="font-family:inherit">'+cel(u.fazenda)+(u.fazenda?tagPos:'')+'</td>'+
+      '<td style="font-family:inherit"><b>'+cel(osDe(u))+'</b>'+(osDe(u)?tagPos:'')+'</td>'+
+      '<td style="font-family:inherit">'+cel(u.operacao||u.tarefa)+(u.produto?' <span style="color:var(--tinta2)">· '+escHtml(u.produto)+'</span>':'')+'</td>'+
+      '<td class="globo"><button class="btn-globo" data-ix="'+ix+'" title="Ver esta pintura no mapa"'+(bboxUnidade(u)?'':' disabled')+'>'+SVG_GLOBO+'</button></td>'+
       '<td class="num">'+u.n.toLocaleString('pt-BR')+'</td>'+
       '<td>'+u.dataHora(0)+'</td><td>'+u.dataHora(u.n-1)+'</td></tr>';
-  }
+  });
+  tb.querySelectorAll('.btn-globo').forEach(b=>b.addEventListener('click', ()=>focarUnidade(+b.dataset.ix)));
   document.getElementById('cartao-unids').style.display = UNIDADES.length?'block':'none';
+}
+const SVG_GLOBO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+/* caixa envolvente da pintura (só pontos aplicando; se não houver, todos os pontos válidos) */
+function bboxUnidade(u){
+  if(u._bb!==undefined) return u._bb;
+  function calc(soAplic){
+    let a=90,b=-90,c=180,d=-180,ok=false;
+    for(let i=0;i<u.n;i++){
+      const la=u.lat[i], lo=u.lon[i];
+      if((la===0&&lo===0) || !isFinite(la) || !isFinite(lo)) continue;
+      if(soAplic && !(u.larg[i]>0)) continue;
+      if(la<a)a=la; if(la>b)b=la; if(lo<c)c=lo; if(lo>d)d=lo; ok=true;
+    }
+    return ok ? [[a,c],[b,d]] : null;
+  }
+  u._bb = calc(true) || calc(false);
+  return u._bb;
+}
+/* globo da tabela: abre o Mapa já enquadrado na pintura da unidade.
+   Se os filtros do mapa esconderem a unidade, eles são liberados antes. */
+function focarUnidade(ix){
+  const u = UNIDADES[ix]; if(!u) return;
+  const bb = bboxUnidade(u); if(!bb) return;
+  let liberou = false;
+  const selF = document.getElementById('sel-frota');
+  if(selF.value!==TODAS && selF.value!==u.frota){ selF.value=TODAS; liberou=true; }
+  if(!unidPassaFiltro(u, FILTRO)){
+    FILTRO.cliente=TODAS; FILTRO.faz=TODAS; FILTRO.area=TODAS;
+    for(const id of ['sel-cliente','sel-faz','sel-area']){ const el=document.getElementById(id); if(el) el.value=TODAS; }
+    if(typeof limparBuscaArea==='function'){ try{ limparBuscaArea(); }catch(e){} }
+    liberou=true;
+  }
+  if(DIAS_SEL.size){
+    let temDia=false;
+    for(let i=0;i<u.n && !temDia;i+=200) if(DIAS_SEL.has(u.dataHora(i).substring(0,10))) temDia=true;
+    if(!temDia && DIAS_SEL.has(u.dataHora(u.n-1).substring(0,10))) temDia=true;
+    if(!temDia){
+      DIAS_SEL.clear();
+      const lista=[...document.querySelectorAll('#dia-pop .pk-dia')].map(c=>c.value);
+      pickerMapa.montar(lista);
+      liberou=true;
+    }
+  }
+  // troca para a aba Mapa
+  document.querySelectorAll('.aba').forEach(x=>x.classList.toggle('ativa', x.dataset.tela==='mapa'));
+  document.querySelectorAll('.tela').forEach(x=>x.classList.toggle('ativa', x.id==='tela-mapa'));
+  garantirMapa();
+  setTimeout(()=>{
+    mapa.invalidateSize();
+    if(!camada || liberou){ try{ desenharMapa(true); }catch(e){ console.warn('desenharMapa', e); } }
+    const lim = L.latLngBounds(bb[0], bb[1]);
+    mapa.fitBounds(lim.pad(0.08), {maxZoom:18});
+    // destaque rápido do enquadramento
+    const r = L.rectangle(lim, {color:'#c9871b', weight:2, dashArray:'6 5', fill:false, interactive:false}).addTo(mapa);
+    setTimeout(()=>{ try{ mapa.removeLayer(r); }catch(e){} }, 2500);
+  }, 80);
 }
 function frotas(){ return [...new Set(UNIDADES.map(u=>u.frota))].sort(); }
 function montarSeletores(){
@@ -1619,7 +2196,8 @@ function desenharMapa(manterVista){
     html = fazendas.map(f=>
       f+' — <b>'+(areaFaz[f]/10000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' ha</b>'
     ).join('<br>')+'<br><div style="border-top:1px solid #ddd;margin:4px 0"></div>'+html;
-    if(diaSel && diaSel!==TODAS) html = '<b>Dia '+diaSel.split('-').reverse().join('/')+'</b><br>'+html;
+    if(DIAS_SEL.size===1) html = '<b>Dia '+fmtDia([...DIAS_SEL][0])+'</b><br>'+html;
+    else if(DIAS_SEL.size>1) html = '<b>'+DIAS_SEL.size+' dias</b><br>'+html;
   }
   if(corSel==='frota'){
     html = frotas().filter(f=>areaFrota[f]).map(f=>
@@ -1638,6 +2216,10 @@ function abrirPopup(e){
   if(osDe(u)) extra += '<tr><td>OS</td><td class="num"><b>'+osDe(u)+'</b></td></tr>';
   if(u.fazenda||u.talhao) extra += '<tr><td>Fazenda · Talhão</td><td class="num"><b>'+([u.fazenda,u.talhao].filter(Boolean).join(' · '))+'</b>'+(u.fonteFT==='local'?' <span style="font-weight:600;color:#b25000">(pos.)</span>':'')+'</td></tr>';
   if(u.tarefa) extra += '<tr><td>Tarefa</td><td class="num">'+u.tarefa+'</td></tr>';
+  if(u.operacao) extra += '<tr><td>Operação</td><td class="num">'+escHtml(u.operacao)+'</td></tr>';
+  if(u.produto) extra += '<tr><td>Produto</td><td class="num">'+escHtml(u.produto)+'</td></tr>';
+  if(u.maquina) extra += '<tr><td>Máquina</td><td class="num">'+escHtml(u.maquina)+'</td></tr>';
+  if(u.alvo && !isNaN(u.alvo[i])) extra += '<tr><td>Taxa alvo</td><td class="num">'+u.alvo[i].toFixed(1)+' L/ha</td></tr>';
   const html = '<b>Frota '+u.frota+' · '+u.nome+'</b> ('+u.fonte+')<br>'+u.dataHora(i)+'<br>'+
     u.lat[i].toFixed(7)+', '+u.lon[i].toFixed(7)+'<table>'+extra+
     '<tr><td>Largura aplicada</td><td class="num"><b>'+fx(u.larg[i],2,' m')+'</b></td></tr>'+
@@ -1718,7 +2300,7 @@ async function exportar(){
       }
       const destino = (grupos.size>1 || sep==='os') ? zip.folder(pasta) : zip;
       destino.file(base+'.shp', s.shp); destino.file(base+'.shx', s.shx);
-      destino.file(base+'.dbf', s.dbf); destino.file(base+'.prj', PRJ);
+      destino.file(base+'.dbf', s.dbf); destino.file(base+'.prj', PRJ); destino.file(base+'.cpg', 'ISO-8859-1');
       nOk++;
     }
     const blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
@@ -1864,16 +2446,18 @@ function gerarSHPfaixa(quads, simpl){
         isNaN(u.taxa[i])?'':u.taxa[i].toFixed(2)];
     });
   } else {
-    campos = [['DATA_HORA','C',23],['FROTA','C',10],['UNIDADE','C',10],
-      ['FAZENDA','C',24],['TALHAO','C',12],['TAREFA','C',32],
-      ['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
+    // padrão AgroCAD: CLIENTE / FAZENDA / TALHAO (= OS) / OPERACAO / PRODUTO + dados do ponto
+    campos = [['CLIENTE','C',40],['FAZENDA','C',40],['TALHAO','C',30],['OPERACAO','C',40],['PRODUTO','C',40],
+      ['DATA_HORA','C',19],['FROTA','C',24],['UNIDADE','C',30],['FONTE','C',6],['MAQUINA','C',30],
+      ['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_ALVO','N',10,2],['TAXA_REAL','N',10,2]];
     linhas = quads.map(q=>{
       const u=q.u, i=q.idx;
-      return [u.dataHora(i), u.frota, u.nome,
-        u.fazenda||'', u.talhao||'', u.tarefa||'',
+      return [u.cliente||'', u.fazenda||'', osDe(u), u.operacao||u.tarefa||'', u.produto||'',
+        u.dataHora(i), u.frota, u.nome, u.fonte, u.maquina||'',
         q.largM.toFixed(2),
         q.velKmh===null?'':q.velKmh.toFixed(1),
         isNaN(u.alt[i])?'':u.alt[i].toFixed(1),
+        (u.alvo && !isNaN(u.alvo[i]))?u.alvo[i].toFixed(2):'',
         isNaN(u.taxa[i])?'':u.taxa[i].toFixed(2)];
     });
   }
