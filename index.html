@@ -1561,16 +1561,17 @@ function normalizarC3000(listaCsv, iniTxt, frota, nome){
     const iVel=col('Speed'), iMaster=col('MasterSwitchStatus'), iMask=col('BoomMask_000');
     const iRateA=col('TankActualRate_000'), iAlt=col('VehicleSteerPointAltitude');
     if(iLat<0||iLon<0) continue;
+    const minCol = Math.max(iLat,iLon,iHead,iVel,iMaster,iMask,iRateA,iAlt,iData,iHora);
     const nSec = ini.secoes.length;
     const maskCheia = nSec ? (1<<nSec)-1 : 0;
     for(let li=1; li<linhas.length; li++){
       if(!linhas[li]) continue;
       const c = linhas[li].split(',');
-      if(c.length<5) continue;
+      if(c.length<=minCol) continue;   // linha truncada (fim de arquivo gravado pela metade)
       const la=parseFloat(c[iLat]), lo=parseFloat(c[iLon]);
       if(!isFinite(la)||!isFinite(lo)) continue;
       let mk = iMask>=0 ? (parseInt(c[iMask])||0) : maskCheia;
-      if(iMaster>=0 && c[iMaster].trim().toLowerCase()!=='on') mk=0;
+      if(iMaster>=0 && String(c[iMaster]||'').trim().toLowerCase()!=='on') mk=0;
       brutos.push({
         dt:(iData>=0?c[iData]:'')+' '+(iHora>=0?c[iHora].substring(0,12):''),
         la, lo, mk,
