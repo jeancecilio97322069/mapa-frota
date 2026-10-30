@@ -254,7 +254,7 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
         <option value="1">Máxima (sólida)</option>
         <option value="0.45">Suave</option>
       </select>
-      <div class="chk"><input type="checkbox" id="chk-inv"><span>Inverter seções (C3000)</span></div>
+      <div class="chk"><input type="checkbox" id="chk-inv"><span>Inverter seções (esq.↔dir.)</span></div>
       <div class="chk" id="grupo-talhoes" style="display:none"><input type="checkbox" id="chk-talhoes" checked><span id="lbl-talhoes">Contorno dos talhões</span></div>
       <div class="chk" id="grupo-perim" style="display:none"><input type="checkbox" id="chk-perim" checked><span id="lbl-perim">Perímetro das fazendas</span></div>
       <div id="opcoes-perim" style="display:none">
@@ -299,7 +299,12 @@ label{font-size:11px;font-weight:700;color:var(--tinta2);text-transform:uppercas
       <select id="exp-cols">
         <option value="simpl">Simplificado — TALHAO, LARG_M, VEL_KMH, ALT_M, TAXA_REAL</option>
         <option value="full">Completo — + DATA_HORA, FROTA, UNIDADE, FAZENDA, TAREFA</option>
+        <option value="agrocad">AgroCAD — 1 polígono por ponto do log + todos os dados do monitor</option>
       </select>
+      <div id="exp-agrocad-nota" style="display:none;font-size:11px;color:var(--tinta2);margin-top:4px">
+        Mesmo layout do export do AgroCAD: CLIENTE · FAZENDA · TALHAO · PRODUTO · Latitude · Longitude · Elevation · Timestamp · WorkStatus · WorkingWid · TX_Aplicad · DistanceTr · VehicleSpe + uma coluna por DDI gravado (TotalQuant, TotalOpera, 00C2…).
+        Diferença: aqui a faixa respeita o corte de seção (cada grupo de seções ligadas vira um polígono na posição real da barra). Desmarque "Agrupar segmentos" para sair ponto a ponto, igual ao AgroCAD.
+      </div>
       <label>Filtrar frota</label>
       <div id="exp-frota-wrap" class="mpick-wrap"><button type="button" id="exp-frota-btn" class="mpick-btn">Todas as frotas</button><div id="exp-frota-pop" class="mpick-pop"></div></div>
       <label id="exp-lbl-cliente">Filtrar cliente</label>
@@ -638,7 +643,8 @@ async function carregarZip(zip, frota, st){
     if(cima.startsWith('TLG') && cima.endsWith('.XML')) xmls[cima] = await z.async('string');
     else if(cima.startsWith('TLG') && cima.endsWith('.BIN')) bins[cima] = await z.async('arraybuffer');
     else if(cima.endsWith('.XML') && ehTaskdataDir &&
-      (cima.startsWith('TSK')||cima.startsWith('PFD')||cima.startsWith('FRM')||cima.startsWith('CTR')))
+      (cima.startsWith('TSK')||cima.startsWith('PFD')||cima.startsWith('FRM')||cima.startsWith('CTR')||
+       cima.startsWith('DVC')||cima.startsWith('PDT')||cima==='TASKDATA.XML'))
       xmlCadastro.push(await z.async('string'));
     else if(cima.endsWith('_PPD_FULLDATA.CSV')){
       const id = idJob(caminho, base.replace(/_PPD_FullData\.csv$/i,''));
@@ -701,11 +707,12 @@ async function carregarZip(zip, frota, st){
     if(!bin) continue;
     st.textContent = frota+' · decodificando '+base+'…';
     await new Promise(r=>setTimeout(r,10));
-    const u = normalizarISO(xmls[nomeX], bin, frota, base);
+    const u = normalizarISO(xmls[nomeX], bin, frota, base, cad.dvc);
     if(u){
       const info = cad.porTLG[base] || {};
       u.tarefa = info.tarefa||''; u.talhao = info.talhao||'';
       u.fazenda = info.fazenda||''; u.cliente = info.cliente||'';
+      if(info.produto && !u.produto) u.produto = info.produto;
       if(info.pfd) pfdsUsados.add(info.pfd);
       UNIDADES.push(u);
     }
@@ -1400,14 +1407,23 @@ function parseCadastro(textos){
     });
   }
   for(const id in pfdM) pfdM[id].fazNome = (frmM[pfdM[id].frm]||{}).nome||'';
+  // produtos (PDT) e dispositivos (DVC: seções, offsets, escalas)
+  const pdt = {}, dvc = {};
+  for(const txt of textos){
+    const doc = parser.parseFromString(txt,'text/xml');
+    doc.querySelectorAll('PDT').forEach(e=>pdt[e.getAttribute('A')]=e.getAttribute('B')||'');
+    doc.querySelectorAll('DVC').forEach(e=>lerDVC(e, dvc));
+  }
   for(const txt of textos){
     const doc = parser.parseFromString(txt,'text/xml');
     doc.querySelectorAll('TSK').forEach(t=>{
       const p = pfdM[t.getAttribute('E')]||{};
       const fz = frmM[p.frm]||{};
+      const prods = [...new Set([...t.querySelectorAll('PAN')].map(pa=>pdt[pa.getAttribute('A')]).filter(Boolean))];
       const info = {
         tarefa:t.getAttribute('B')||'', talhao:p.nome||'',
-        fazenda:fz.nome||'', cliente:ctr[fz.ctr]||'', pfd:t.getAttribute('E')||''
+        fazenda:fz.nome||'', cliente:ctr[fz.ctr]||'', pfd:t.getAttribute('E')||'',
+        produto:prods.join(' + ')
       };
       t.querySelectorAll('TLG').forEach(g=>{
         const nm = (g.getAttribute('A')||'').toUpperCase();
@@ -1415,12 +1431,114 @@ function parseCadastro(textos){
       });
     });
   }
-  return {porTLG, pfdM};
+  return {porTLG, pfdM, dvc};
+}
+
+/* ================= DVC (ISO 11783-10): estrutura do implemento =================
+   dets[DET-x] = {id, obj, tipo, nome, elem, pai, dors:[obj], dvc}
+   Por DVC: dpd/dpt/dvp indexados pelo object id (únicos só dentro do DVC). */
+function lerDVC(e, saida){
+  const d = {id:e.getAttribute('A'), nome:e.getAttribute('B')||'', dets:[], dpd:{}, dpt:{}, dvp:{}};
+  e.querySelectorAll('DPD').forEach(x=>d.dpd[x.getAttribute('A')]={ddi:(x.getAttribute('B')||'').toUpperCase(), nome:x.getAttribute('E')||'', dvp:x.getAttribute('F')});
+  e.querySelectorAll('DPT').forEach(x=>d.dpt[x.getAttribute('A')]={ddi:(x.getAttribute('B')||'').toUpperCase(), val:parseFloat(x.getAttribute('C')), nome:x.getAttribute('D')||'', dvp:x.getAttribute('E')});
+  e.querySelectorAll('DVP').forEach(x=>d.dvp[x.getAttribute('A')]={off:parseFloat(x.getAttribute('B'))||0, esc:parseFloat(x.getAttribute('C'))||1, unid:x.getAttribute('E')||''});
+  e.querySelectorAll('DET').forEach(x=>{
+    const det = {id:x.getAttribute('A'), obj:x.getAttribute('B'), tipo:x.getAttribute('C'), nome:x.getAttribute('D')||'',
+      elem:parseInt(x.getAttribute('E'))||0, pai:x.getAttribute('F'), dors:[...x.querySelectorAll('DOR')].map(o=>o.getAttribute('A')), dvc:d};
+    d.dets.push(det);
+    saida[det.id] = det;
+  });
+  return d;
+}
+/* valor fixo (DPT) de um DDI dentro de um DET, em unidades do arquivo (mm p/ 0086/0087/0043) */
+function dptDe(det, ddi){
+  for(const o of det.dors){ const p = det.dvc.dpt[o]; if(p && p.ddi===ddi && isFinite(p.val)) return p.val; }
+  return null;
+}
+/* escala/unidade de um DDI logado num DET (DPD -> DVP) */
+function escalaDe(det, ddi){
+  if(det) for(const o of det.dors){
+    const p = det.dvc.dpd[o];
+    if(p && p.ddi===ddi){ const v = det.dvc.dvp[p.dvp]; return {esc:v?v.esc:1, off:v?v.off:0, unid:v?v.unid:'', nome:p.nome}; }
+  }
+  return {esc:1, off:0, unid:'', nome:''};
+}
+/* Geometria das seções a partir do DVC.
+   - estado por seção: DDI 00A1 (seções 1-16), 00A2 (17-32)… 2 bits/seção, 01 = ligada
+   - posição lateral: DPT 0087 (Y, + = direita do sentido de deslocamento), largura: DPT 0043
+   - recuo da barra em relação à antena: (X barra − X conector do implemento) + (X conector do trator − X antena)
+   Retorna null se faltar algo — aí a pintura continua no modo antigo (faixa centrada). */
+function geometriaSecoesISO(dlvs, dets){
+  if(!dets) return null;
+  const iA1 = dlvs.findIndex(d=>d.ddi==='00A1');
+  if(iA1<0) return null;
+  const detA1 = dets[dlvs[iA1].det];
+  if(!detA1) return null;
+  const dv = detA1.dvc;
+  const barra = detA1.tipo==='2' ? detA1 : dv.dets.find(x=>x.tipo==='2');
+  let secs = dv.dets.filter(x=>x.tipo==='4' && barra && x.pai===barra.obj);
+  if(!secs.length) secs = dv.dets.filter(x=>x.tipo==='4');
+  secs.sort((a,b)=>a.elem-b.elem);
+  const secoes=[], offsets=[];
+  for(const s of secs){
+    const y = dptDe(s,'0087'), w = dptDe(s,'0043');
+    if(y===null || !(w>0)) return null;
+    secoes.push(w/1000); offsets.push([(y-w/2)/1000, (y+w/2)/1000]);
+  }
+  if(!secoes.length || secoes.length>64) return null;
+  // DLV de cada bloco de 16 seções (00A1, 00A2, …) no mesmo dispositivo
+  const blocos=[];
+  for(let b=0; b*16<secoes.length; b++){
+    const ddi = (0xA1+b).toString(16).toUpperCase().padStart(4,'0');
+    const k = dlvs.findIndex(d=>d.ddi===ddi && dets[d.det] && dets[d.det].dvc===dv);
+    if(k<0) return null;
+    blocos.push(k);
+  }
+  // recuo longitudinal (m, negativo = barra atrás da antena)
+  const xBarra = (barra && dptDe(barra,'0086')) || (secs.length && dptDe(secs[0],'0086')) || 0;
+  const conImpl = dv.dets.find(x=>x.tipo==='6');
+  const xConImpl = conImpl ? (dptDe(conImpl,'0086')||0) : 0;
+  let xAntena = 0, xConTrator = 0;
+  const gps = Object.values(dets).find(x=>x.tipo==='7' && x.dvc!==dv);
+  if(gps){
+    xAntena = dptDe(gps,'0086')||0;
+    const cons = gps.dvc.dets.filter(x=>x.tipo==='6').map(x=>dptDe(x,'0086')).filter(v=>v!==null);
+    if(cons.length) xConTrator = xBarra<=0 ? Math.min(...cons) : Math.max(...cons);
+  }
+  const recuo = ((xBarra - xConImpl) + (xConTrator - xAntena))/1000;
+  return {secoes, offsets, largTotal:secoes.reduce((s,w)=>s+w,0), blocos, recuo};
+}
+/* rumo (graus, horário a partir do norte) pela própria trilha GPS — janela de ±1,5 m */
+function rumoTrilha(lat, lon, tempo, n){
+  const head = new Float32Array(n).fill(NaN);
+  let i0=0; while(i0<n && lat[i0]===0 && lon[i0]===0) i0++;
+  if(i0>=n) return head;
+  const kx = 111320*Math.cos(lat[i0]*Math.PI/180), ky = 111132;
+  const X=new Float64Array(n), Y=new Float64Array(n);
+  for(let i=0;i<n;i++){ X[i]=lon[i]*kx; Y[i]=lat[i]*ky; }
+  const ok = i => !(lat[i]===0 && lon[i]===0);
+  let f=0, b=0;
+  for(let i=0;i<n;i++){
+    if(!ok(i)) continue;
+    if(f<i) f=i;
+    while(f<n-1 && ok(f+1) && Math.hypot(X[f]-X[i],Y[f]-Y[i])<1.5 && tempo[f+1]-tempo[i]<5000) f++;
+    // b = último ponto anterior que ainda está a ≥1,5 m de i
+    while(b+1<i && Math.hypot(X[i]-X[b+1],Y[i]-Y[b+1])>=1.5) b++;
+    const bb = (b<i && ok(b) && tempo[i]-tempo[b]<5000) ? b : i;
+    const dx = X[f]-X[bb], dy = Y[f]-Y[bb];
+    if(Math.hypot(dx,dy)>=0.5) head[i] = Math.atan2(dx,dy)*180/Math.PI;
+  }
+  // preenche parado/indefinido com o último rumo válido (e o início com o primeiro)
+  let ult = NaN;
+  for(let i=0;i<n;i++){ if(isNaN(head[i])) head[i]=ult; else ult=head[i]; }
+  let pri = NaN;
+  for(let i=n-1;i>=0;i--){ if(isNaN(head[i])) head[i]=pri; else pri=head[i]; }
+  return head;
 }
 
 /* ================= Fonte ISO-XML ================= */
 const TAM = {i4:4,u4:4,u2:2,u1:1};
-function normalizarISO(xmlTxt, buf, frota, nome){
+function normalizarISO(xmlTxt, buf, frota, nome, dets){
   const doc = new DOMParser().parseFromString(xmlTxt, 'text/xml');
   const tim = doc.querySelector('TIM');
   if(!tim) return null;
@@ -1497,12 +1615,46 @@ function normalizarISO(xmlTxt, buf, frota, nome){
   const larg=new Float32Array(n), taxa=new Float32Array(n).fill(NaN);
   const vel=new Float32Array(n).fill(NaN), alt=new Float32Array(n).fill(NaN);
   const tempo=new Float64Array(n);
+  for(let i=0;i<n;i++) tempo[i] = dia[i]*86400000 + ms[i];
   const kx = 111320*Math.cos((lat[0]||0)*Math.PI/180), ky = 111132;
+  // seções reais (DVC + 00A1): cada seção na sua posição lateral, barra no recuo correto
+  const geo = geometriaSecoesISO(L.dlvs, dets);
+  let head=null, mask=null, ini=null;
+  if(geo){
+    const cols = geo.blocos.map(k=>colFF(k));
+    mask = new Int32Array(n);
+    head = rumoTrilha(lat, lon, tempo, n);
+    const ns = geo.secoes.length;
+    for(let i=0;i<n;i++){
+      let m=0;
+      for(let s=0;s<ns && s<31;s++){
+        const v = cols[s>>4][i];
+        if(!isNaN(v) && (((v|0)>>>(2*(s&15)))&3)===1) m |= (1<<s);
+      }
+      mask[i]=m;
+      // GPS -> centro da barra (recuo ao longo do rumo)
+      if(geo.recuo && !(lat[i]===0&&lon[i]===0) && !isNaN(head[i])){
+        const h = head[i]*Math.PI/180;
+        lat[i] += geo.recuo*Math.cos(h)/ky;
+        lon[i] += geo.recuo*Math.sin(h)/(111320*Math.cos(lat[i]*Math.PI/180));
+      }
+    }
+    ini = {secoes:geo.secoes, offsets:geo.offsets, largTotal:geo.largTotal, recuo:geo.recuo};
+  }
+  const cacheLarg = new Map();
+  const largMask = mk => {
+    if(cacheLarg.has(mk)) return cacheLarg.get(mk);
+    let s=0; for(let k=0;k<ini.secoes.length;k++) if(mk>>k & 1) s+=ini.secoes[k];
+    cacheLarg.set(mk,s); return s;
+  };
   let j=0;
   for(let i=0;i<n;i++){
-    tempo[i] = dia[i]*86400000 + ms[i];
-    let lg = cLarg ? (isNaN(cLarg[i])||cLarg[i]<=0 ? 0 : cLarg[i]/1000) : 0;
-    if(cWS && !isNaN(cWS[i]) && cWS[i]<=0) lg = 0;
+    let lg;
+    if(mask) lg = mask[i] ? largMask(mask[i]) : 0;
+    else {
+      lg = cLarg ? (isNaN(cLarg[i])||cLarg[i]<=0 ? 0 : cLarg[i]/1000) : 0;
+      if(cWS && !isNaN(cWS[i]) && cWS[i]<=0) lg = 0;
+    }
     larg[i]=lg;
     if(cTaxa && !isNaN(cTaxa[i])) taxa[i]=cTaxa[i]*1e-4;
     if(temAlt) alt[i]=altMM[i]/1000;
@@ -1515,8 +1667,10 @@ function normalizarISO(xmlTxt, buf, frota, nome){
     }
   }
   const fmt = i => new Date(Date.UTC(1980,0,1)+tempo[i]).toISOString().replace('T',' ').substring(0,19);
+  // bruto dos DLVs guardado p/ a exportação ponto a ponto (formato AgroCAD); colunas montadas só na hora
+  const brutoISO = {dlvs:L.dlvs, dlvPtr, dlvIdx, dlvVal, dets:dets||null, colFF, melhorDDI};
   return {frota, fonte:'ISO', nome, n, lat, lon, larg, taxa, vel, alt, tempo,
-    head:null, mask:null, ini:null, dataHora:fmt};
+    head, mask, ini, dataHora:fmt, brutoISO};
 }
 
 /* ================= Fonte C3000 ================= */
@@ -2255,7 +2409,7 @@ async function exportar(){
   await new Promise(r=>setTimeout(r,30));
   try{
     const sep = document.getElementById('exp-sep').value;
-    const simpl = (document.getElementById('exp-cols')||{}).value !== 'full';
+    const modo = (document.getElementById('exp-cols')||{}).value || 'simpl';
     const passoM = document.getElementById('exp-agrupa').checked ? 2 : 0.001;
     const inv = document.getElementById('chk-inv').checked;
     // gera quads das unidades filtradas por frota/cliente/fazenda, depois filtra por dia e área
@@ -2297,7 +2451,7 @@ async function exportar(){
     for(const [rot, lista] of grupos){
       st.textContent = rot+'… ('+lista.length.toLocaleString('pt-BR')+' polígonos)';
       await new Promise(r=>setTimeout(r,10));
-      const s = gerarSHPfaixa(lista, simpl);
+      const s = gerarSHPfaixa(lista, modo);
       let pasta, base;
       if(sep==='os'){
         // espelha a hierarquia de importação: <FAZENDA>/OS<num>/<num>.shp
@@ -2368,7 +2522,7 @@ function gerarQuadsUnidade(u, passoM, inv){
         }
         if(a2<0) anel = anel.slice().reverse();
         anel = anel.concat([anel[0]]);
-        quads.push({anel, u, idx:a.idx, largM:pt.largM, velKmh:isNaN(velKmh)?null:velKmh});
+        quads.push({anel, u, idx:a.idx, largM:pt.largM, distM, mk:a.mk, largEf:a.larg, velKmh:isNaN(velKmh)?null:velKmh});
       }
     }
   }
@@ -2408,7 +2562,8 @@ function gerarDBF(campos, linhas){
   u8[buf.byteLength-1]=0x1A;
   return buf;
 }
-function gerarSHPfaixa(quads, simpl){
+function gerarSHPfaixa(quads, modo){
+  const simpl = modo==='simpl' || modo===true;
   const n = quads.length;
   const recBytes = 136;
   const shpLen = 100 + n*recBytes;
@@ -2447,7 +2602,9 @@ function gerarSHPfaixa(quads, simpl){
     o+=recBytes;
   });
   let campos, linhas;
-  if(simpl){
+  if(modo==='agrocad'){
+    ({campos, linhas} = tabelaAgroCAD(quads));
+  } else if(simpl){
     // formato enxuto (padrão dos SHP do Jean): TALHAO + métricas
     campos = [['TALHAO','C',12],['LARG_M','N',7,2],['VEL_KMH','N',7,1],['ALT_M','N',8,1],['TAXA_REAL','N',10,2]];
     linhas = quads.map(q=>{
@@ -2475,6 +2632,92 @@ function gerarSHPfaixa(quads, simpl){
   }
   return {shp:shp.buffer, shx:shx.buffer, dbf:gerarDBF(campos,linhas), n};
 }
+/* ---------- Exportação no layout do AgroCAD (1 polígono por ponto + dados do monitor) ---------- */
+// nomes que o AgroCAD usa p/ alguns DDIs; os demais saem com o código hex (ex.: 00C2, 0049, 0025, E7A4)
+const NOMES_AGROCAD = {'0077':'TotalOpera','0050':'TotalQuant','009E':'dtPrescrip','00CD':'SCTurnOnTi',
+  '00CE':'SCTurnOffT','00A0':'dtSectionC','0048':'ProvidedAm','0001':'TX_Alvo'};
+const TOTAIS_ISO = new Set(['0050','0051','0052','0074','0077','0078']);
+const DDI_ESTADO = new Set(['009E','00A0']);              // saem como texto On/Off
+const DDI_FORA = new Set(['DFFF','0043','0046','0002','008D']); // já representados em colunas próprias
+for(let b=0;b<16;b++) DDI_FORA.add((0xA1+b).toString(16).toUpperCase().padStart(4,'0')); // estados condensados -> SECOES
+/* colunas extras de uma unidade ISO: [{col, vals(Float64Array já na escala), estado}] — calculadas só na exportação */
+function extrasISO(u){
+  if(u._extras) return u._extras;
+  const b = u.brutoISO, out = [];
+  if(b){
+    const vistos = new Set();
+    for(const d of b.dlvs){
+      const ddi = d.ddi;
+      if(vistos.has(ddi) || DDI_FORA.has(ddi)) continue;
+      vistos.add(ddi);
+      const k = b.melhorDDI(parseInt(ddi,16));
+      if(k<0) continue;
+      const det = b.dets ? b.dets[b.dlvs[k].det] : null;
+      // totais (0050 L, 0051 kg, 0052 contagem, 0074 m², 0077/0078 s) já vêm na unidade ISO;
+      // alguns monitores reaproveitam o DVP de mL->L e dividiriam por 1000 à toa
+      const e = TOTAIS_ISO.has(ddi) ? {esc:1, off:0} : escalaDe(det, ddi);
+      const bruto = b.colFF(k);
+      const vals = new Float64Array(u.n);
+      for(let i=0;i<u.n;i++) vals[i] = isNaN(bruto[i]) ? NaN : (bruto[i]+e.off)*e.esc;
+      out.push({col:(NOMES_AGROCAD[ddi]||ddi).substring(0,10), vals, estado:DDI_ESTADO.has(ddi)});
+    }
+  }
+  u._extras = out;
+  return out;
+}
+function tabelaAgroCAD(quads){
+  // união das colunas extras de todas as unidades do grupo (ordem de aparição)
+  const ordem = [], porU = new Map();
+  for(const q of quads){
+    if(porU.has(q.u)) continue;
+    const ex = extrasISO(q.u);
+    const m = new Map(ex.map(e=>[e.col,e]));
+    porU.set(q.u, m);
+    for(const e of ex) if(!ordem.includes(e.col)) ordem.push(e.col);
+  }
+  const estadoCol = new Set();
+  for(const m of porU.values()) for(const e of m.values()) if(e.estado) estadoCol.add(e.col);
+  const campos = [['CLIENTE','C',60],['FAZENDA','C',60],['TALHAO','C',40],['PRODUTO','C',60],
+    ['Latitude','N',18,9],['Longitude','N',18,9],['Elevation','N',12,3],['Timestamp','C',19],
+    ['WorkStatus','C',9],['WorkingWid','N',10,3],['Widt1','N',10,3],['LargPolig','N',10,3],['SECOES','C',32],
+    ['TX_Aplicad','N',14,4],['DistanceTr','N',12,4],['VehicleSpe','N',10,3],['FROTA','C',24],['UNIDADE','C',30]];
+  for(const c of ordem) campos.push(estadoCol.has(c) ? [c,'C',6] : [c,'N',18,4]);
+  const num = (v,d) => (v===null || v===undefined || isNaN(v)) ? '' : v.toFixed(d);
+  const linhas = quads.map(q=>{
+    const u=q.u, i=q.idx;
+    const [dd,hh] = u.dataHora(i).split(' ');
+    const ts = /^\d{4}-\d{2}-\d{2}$/.test(dd||'') ? dd.split('-').reverse().join('/')+' '+(hh||'') : u.dataHora(i);
+    let secTxt = '';
+    // estado das seções do próprio polígono (na troca de seções o quad-ponte leva o estado novo)
+    const mk = (q.mk!==undefined && u.mask) ? q.mk : (u.mask ? u.mask[i] : 0);
+    const largEf = (q.largEf!==undefined) ? q.largEf : u.larg[i];
+    if(u.mask && u.ini) for(let k=0;k<u.ini.secoes.length && k<32;k++) secTxt += (mk>>k & 1) ? '1' : '0';
+    const largTot = u.ini ? u.ini.largTotal : u.larg[i];
+    const lin = [u.cliente||'', u.fazenda||'', osDe(u), u.produto||'',
+      num(u.lat[i],9), num(u.lon[i],9), num(u.alt[i],3), ts,
+      largEf>0 ? 'Ligado' : 'Desligado', num(largEf,3), num(largTot,3), num(q.largM,3), secTxt,
+      num(u.taxa[i],4), num(q.distM,4), q.velKmh===null?'':q.velKmh.toFixed(3), u.frota, u.nome];
+    const m = porU.get(u);
+    for(const c of ordem){
+      const e = m.get(c);
+      if(!e){ lin.push(''); continue; }
+      const v = e.vals[i];
+      lin.push(e.estado ? (isNaN(v)?'':(v?'On':'Off')) : num(Math.round(v*1e4)/1e4,4));
+    }
+    return lin;
+  });
+  // campos texto com a largura que realmente precisam (dbf bem menor que os 254 fixos do AgroCAD)
+  campos.forEach((c,ci)=>{
+    if(c[1]!=='C') return;
+    let w=1; for(const l of linhas){ const s=String(l[ci]); if(s.length>w) w=s.length; }
+    c[2] = Math.min(254, w);
+  });
+  return {campos, linhas};
+}
+(function(){
+  const sel = document.getElementById('exp-cols'), nota = document.getElementById('exp-agrocad-nota');
+  if(sel && nota){ const f=()=>{ nota.style.display = sel.value==='agrocad' ? 'block' : 'none'; }; sel.addEventListener('change', f); f(); }
+})();
 const PRJ='GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
 async function entregarArquivo(blob, arqNome){
   const f = new File([blob], arqNome, {type: blob.type||'application/octet-stream'});
